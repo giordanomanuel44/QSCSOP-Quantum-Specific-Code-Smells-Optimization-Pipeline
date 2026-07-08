@@ -33,19 +33,5 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 
-[tool.ruff.lint]
-select = [
-    "E",
-    "W",
-    "F",
-    "I",
-    "N",
-    "UP",
-    "B",
-    "SIM",
-    "C4",
-]
-ignore = []
-
 [tool.setuptools.packages.find]
 where = ["src"]
