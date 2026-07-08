@@ -35,15 +35,15 @@ line-length = 100
 
 [tool.ruff.lint]
 select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes
-    "I",    # isort (ordinamento import)
-    "N",    # naming conventions
-    "UP",   # pyupgrade
-    "B",    # bugbear (bug comuni)
-    "SIM",  # simplify
-    "C4",   # comprehensions
+    "E",
+    "W",
+    "F",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "SIM",
+    "C4",
 ]
 ignore = []
 
