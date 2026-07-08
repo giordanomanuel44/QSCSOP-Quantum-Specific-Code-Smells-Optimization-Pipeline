@@ -21,3 +21,7 @@ outputs/reports/*
 # IDE
 .vscode/
 .idea/
+
+*.egg-info/
+
+.idea/

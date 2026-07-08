@@ -1,0 +1,40 @@
+[project]
+name = "qscsop-pipeline"
+version = "0.1.0"
+description = "Quantum Specific Code Smells Optimization Pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "qiskit",
+    "crewai",
+    "pandas",
+    "matplotlib",
+    "seaborn",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+    "ruff",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+markers = [
+    "unit: test veloci e isolati, eseguiti sempre",
+    "integration: test tra più componenti dello stesso modulo",
+    "e2e: test costosi con Qiskit/LLM reali, eseguiti manualmente",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.black]
+line-length = 100
+
+[tool.setuptools.packages.find]
+where = ["src"]
