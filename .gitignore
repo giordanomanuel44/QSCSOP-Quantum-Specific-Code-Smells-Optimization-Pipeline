@@ -23,5 +23,5 @@ outputs/reports/*
 .idea/
 
 *.egg-info/
-
+CLAUDE.local.md
 .idea/
