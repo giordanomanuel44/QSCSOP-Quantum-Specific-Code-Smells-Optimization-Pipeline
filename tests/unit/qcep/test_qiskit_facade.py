@@ -1,3 +1,6 @@
+import io
+import sys
+
 import pytest
 from qiskit import QuantumCircuit
 
@@ -69,6 +72,25 @@ def test_isolate_circuit_propagates_syntax_errors(facade: QiskitFacade) -> None:
 def test_isolate_circuit_raises_value_error_without_circuit(facade: QiskitFacade) -> None:
     with pytest.raises(ValueError):
         facade.isolate_circuit(NO_CIRCUIT_SOURCE)
+
+
+@pytest.mark.unit
+def test_isolate_circuit_survives_unencodable_print_output(
+    facade: QiskitFacade, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Simula una console con encoding stretto (es. cp1252 su Windows) forzando stdout ad
+    # ascii/strict: senza il reconfigure tollerante in isolate_circuit, il print() di un
+    # carattere non-ASCII solleverebbe UnicodeEncodeError e farebbe fallire l'estrazione di
+    # un circuito altrimenti valido.
+    restrictive_stdout = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+    monkeypatch.setattr(sys, "stdout", restrictive_stdout)
+
+    source_with_unencodable_print = BELL_SOURCE + "\nprint('\\u03b8')\n"
+
+    circuit = facade.isolate_circuit(source_with_unencodable_print)
+
+    assert isinstance(circuit, QuantumCircuit)
+    assert circuit.num_qubits == 2
 
 
 @pytest.mark.unit

@@ -1,5 +1,9 @@
 """Implementazione concreta dell'unico punto di contatto ammesso con il framework Qiskit."""
 
+import sys
+from collections.abc import Generator
+from contextlib import contextmanager
+
 from qiskit import QuantumCircuit, transpile
 from qiskit.providers.fake_provider import GenericBackendV2
 
@@ -18,7 +22,16 @@ class QiskitFacade(IQiskitFacade):
     def isolate_circuit(self, source_code: str) -> QuantumCircuit:
         """Esegue source_code in sandbox e ritorna l'ultimo QuantumCircuit assegnato."""
         namespace: dict = {}
-        exec(source_code, namespace)
+
+        # source_code proviene da mining di repository reali e puo' contenere print() di
+        # caratteri non rappresentabili nell'encoding di default della console (es. cp1252 su
+        # Windows, con simboli come i box-drawing del disegno ASCII di un circuito o lettere
+        # greche). Senza questo reconfigure, un simile print() farebbe fallire l'intero exec()
+        # con UnicodeEncodeError, scartando un circuito altrimenti valido a monte in
+        # QuantumMetricsService. errors="replace" sostituisce i caratteri non rappresentabili
+        # invece di sollevare eccezione, senza cambiare l'encoding effettivo dello stream.
+        with self._tolerant_stdio():
+            exec(source_code, namespace)
 
         circuit = None
         for value in namespace.values():
@@ -49,3 +62,22 @@ class QiskitFacade(IQiskitFacade):
     def _extract_metrics(qc: QuantumCircuit) -> dict:
         """Calcola la coppia gateCount/depth condivisa da metriche astratte e fisiche."""
         return {"gateCount": qc.size(), "depth": qc.depth()}
+
+    @staticmethod
+    @contextmanager
+    def _tolerant_stdio() -> Generator[None, None, None]:
+        """Rende temporaneamente stdout/stderr tolleranti a caratteri non rappresentabili.
+
+        Alcuni stream sostitutivi (es. la cattura di pytest, o pipe senza terminale) non
+        espongono reconfigure(): in quel caso non c'e' nulla da tollerare, si prosegue tali e
+        quali.
+        """
+        streams = [s for s in (sys.stdout, sys.stderr) if hasattr(s, "reconfigure")]
+        original_errors = [s.errors for s in streams]
+        for s in streams:
+            s.reconfigure(errors="replace")
+        try:
+            yield
+        finally:
+            for s, errors in zip(streams, original_errors, strict=True):
+                s.reconfigure(errors=errors)

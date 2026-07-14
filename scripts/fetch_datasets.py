@@ -77,6 +77,27 @@ BUGS4Q_PROGRAM_SOURCE = "Program"
 # Escluse per definizione: Cirq (framework diverso), Q# (linguaggio diverso, non Python)
 
 
+# I file del dataset TheSmellyEight contengono, dopo la definizione e transpilazione del
+# circuito, righe di visualizzazione (qc.draw) ed export verso un modulo privato del
+# repository originale dello studio (quantum_circuit_to_matrix), non installabile via pip.
+# Queste righe non sono necessarie per l'estrazione delle metriche del circuito (obiettivo di
+# QCEP) e causano il fallimento dell'intero exec() in isolate_circuit, scartando circuiti
+# altrimenti validi. La pulizia avviene qui, in fase di preparazione del dataset grezzo, per
+# preservare inalterato il comportamento di QiskitFacade (che deve continuare a propagare
+# fedelmente qualsiasi eccezione, comportamento gia' coperto da test).
+def _strip_post_transpile_tooling(content: str) -> tuple[str, int]:
+    """Tronca il sorgente alla prima riga con .draw(, azzerando righe vuote finali in eccesso."""
+    lines = content.splitlines()
+    draw_index = next((i for i, line in enumerate(lines) if ".draw(" in line), None)
+    if draw_index is None:
+        return content, 0
+
+    kept_lines = lines[:draw_index]
+    cleaned_content = "\n".join(kept_lines).rstrip() + "\n"
+    removed_count = len(lines) - draw_index
+    return cleaned_content, removed_count
+
+
 def fetch_thesmellyeight() -> None:
     dest = DATA_RAW / "thesmellyeight"
     dest.mkdir(parents=True, exist_ok=True)
@@ -92,7 +113,14 @@ def fetch_thesmellyeight() -> None:
         smell_dest.mkdir(exist_ok=True)
 
         for py_file in smell_dir.glob("*.py"):
-            shutil.copy2(py_file, smell_dest / py_file.name)
+            content = py_file.read_text(encoding="utf-8")
+            cleaned_content, removed_count = _strip_post_transpile_tooling(content)
+            if removed_count > 0:
+                print(
+                    f"[CLEAN] {py_file.name}: rimosse {removed_count} righe di tooling "
+                    "post-transpile (.draw/export)"
+                )
+            (smell_dest / py_file.name).write_text(cleaned_content, encoding="utf-8")
             copied += 1
 
     print(f"TheSmellyEight: copiati {copied} file .py in {dest}")
