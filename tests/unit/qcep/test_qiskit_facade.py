@@ -116,3 +116,82 @@ def test_transpile_and_physical_metrics_are_consistent_with_abstract(facade: Qis
 
     assert physical_metrics["gateCount"] >= abstract_metrics["gateCount"]
     assert physical_metrics["depth"] >= abstract_metrics["depth"]
+
+
+@pytest.mark.unit
+def test_compile_circuit_on_valid_code_returns_true_and_no_message(facade: QiskitFacade) -> None:
+    is_valid, error_message = facade.compile_circuit(BELL_SOURCE)
+
+    assert is_valid is True
+    assert error_message is None
+
+
+@pytest.mark.unit
+def test_compile_circuit_on_broken_code_returns_false_and_message(facade: QiskitFacade) -> None:
+    is_valid, error_message = facade.compile_circuit(BROKEN_SOURCE)
+
+    assert is_valid is False
+    assert isinstance(error_message, str)
+    assert error_message != ""
+
+
+@pytest.mark.unit
+def test_check_equivalence_on_identical_circuits_is_true(facade: QiskitFacade) -> None:
+    assert facade.check_equivalence(BELL_SOURCE, BELL_SOURCE) is True
+
+
+@pytest.mark.unit
+def test_check_equivalence_on_functionally_different_circuits_is_false(
+    facade: QiskitFacade,
+) -> None:
+    bell_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+qc.cx(0, 1)
+"""
+    hadamard_only_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+"""
+
+    assert facade.check_equivalence(bell_source, hadamard_only_source) is False
+
+
+@pytest.mark.unit
+def test_check_equivalence_on_syntactically_different_but_equivalent_circuits_is_true(
+    facade: QiskitFacade,
+) -> None:
+    # X e H-Z-H sono la stessa trasformazione (a meno di fase globale): gate diversi, stesso
+    # stato risultante.
+    baseline_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(1)
+qc.x(0)
+"""
+    equivalent_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(1)
+qc.h(0)
+qc.z(0)
+qc.h(0)
+"""
+
+    assert facade.check_equivalence(baseline_source, equivalent_source) is True
+
+
+@pytest.mark.unit
+def test_calculate_metrics_returns_exactly_abstract_and_physical_keys(
+    facade: QiskitFacade,
+) -> None:
+    metrics = facade.calculate_metrics(BELL_SOURCE)
+
+    assert set(metrics.keys()) == {"abstractMetrics", "physicalMetrics"}
+    assert metrics["abstractMetrics"] == {"gateCount": 2, "depth": 2}
+    assert metrics["physicalMetrics"]["gateCount"] >= metrics["abstractMetrics"]["gateCount"]
+    assert metrics["physicalMetrics"]["depth"] >= metrics["abstractMetrics"]["depth"]

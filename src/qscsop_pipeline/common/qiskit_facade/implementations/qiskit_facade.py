@@ -1,11 +1,14 @@
 """Implementazione concreta dell'unico punto di contatto ammesso con il framework Qiskit."""
 
 import sys
+import traceback
 from collections.abc import Generator
 from contextlib import contextmanager
+from typing import Optional
 
 from qiskit import QuantumCircuit, transpile
 from qiskit.providers.fake_provider import GenericBackendV2
+from qiskit.quantum_info import Statevector
 
 from qscsop_pipeline.common.qiskit_facade.interfaces.i_qiskit_facade import IQiskitFacade
 
@@ -62,6 +65,39 @@ class QiskitFacade(IQiskitFacade):
     def _extract_metrics(qc: QuantumCircuit) -> dict:
         """Calcola la coppia gateCount/depth condivisa da metriche astratte e fisiche."""
         return {"gateCount": qc.size(), "depth": qc.depth()}
+
+    def compile_circuit(self, source_code: str) -> tuple[bool, Optional[str]]:
+        """Tenta di isolare source_code; ritorna (True, None) o (False, messaggio d'errore)."""
+        try:
+            self.isolate_circuit(source_code)
+        except Exception:
+            return False, traceback.format_exc()
+        return True, None
+
+    def check_equivalence(self, baseline_code: str, new_code: str) -> bool:
+        """Isola entrambi i codici e confronta i rispettivi Statevector.
+
+        Il chiamante deve aver gia' verificato compile_circuit(new_code) prima di arrivare qui:
+        un'eccezione di isolamento non viene gestita, ma propagata.
+        """
+        baseline_circuit = self.isolate_circuit(baseline_code)
+        new_circuit = self.isolate_circuit(new_code)
+
+        baseline_state = Statevector.from_instruction(baseline_circuit)
+        new_state = Statevector.from_instruction(new_circuit)
+
+        return baseline_state.equiv(new_state)
+
+    def calculate_metrics(self, code: str) -> dict:
+        """Isola, transpila e ritorna {"abstractMetrics": {...}, "physicalMetrics": {...}}."""
+        qc = self.isolate_circuit(code)
+        abstract_metrics = self.get_abstract_metrics(qc)
+        transpiled_qc = self.transpile_circuit(qc)
+        physical_metrics = self.get_physical_metrics(transpiled_qc)
+        return {
+            "abstractMetrics": abstract_metrics,
+            "physicalMetrics": physical_metrics,
+        }
 
     @staticmethod
     @contextmanager

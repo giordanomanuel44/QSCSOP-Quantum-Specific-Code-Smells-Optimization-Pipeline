@@ -1,6 +1,7 @@
 """Interfaccia astratta per l'unico punto di contatto ammesso con il framework Qiskit."""
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from qiskit import QuantumCircuit
 
@@ -26,4 +27,19 @@ class IQiskitFacade(ABC):
     @abstractmethod
     def get_physical_metrics(self, qc: QuantumCircuit) -> dict:
         """Ritorna gateCount e depth del circuito dopo la transpilazione."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def compile_circuit(self, source_code: str) -> tuple[bool, Optional[str]]:
+        """Tenta di isolare source_code; ritorna (True, None) o (False, messaggio d'errore)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def check_equivalence(self, baseline_code: str, new_code: str) -> bool:
+        """Isola entrambi i codici e confronta i rispettivi Statevector a meno di fase globale."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def calculate_metrics(self, code: str) -> dict:
+        """Isola, transpila e ritorna {"abstractMetrics": {...}, "physicalMetrics": {...}}."""
         raise NotImplementedError
