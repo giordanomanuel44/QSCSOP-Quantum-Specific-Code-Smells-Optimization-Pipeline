@@ -1,5 +1,6 @@
-"""Value object immutabile: esito della pipeline di verifica deterministica di QSCSOP."""
+"""Esito della pipeline di verifica deterministica di QSCSOP."""
 
+import copy
 from typing import Optional
 
 
@@ -19,8 +20,19 @@ class ValidationResultDTO:
     def get_is_valid(self) -> bool:
         return self._is_valid
 
+    def set_is_valid(self, value: bool) -> None:
+        self._is_valid = value
+
     def get_raw_error_data(self) -> Optional[str]:
         return self._raw_error_data
 
+    def set_raw_error_data(self, value: Optional[str]) -> None:
+        self._raw_error_data = value
+
     def get_new_metrics(self) -> Optional[dict]:
-        return self._new_metrics
+        """Ritorna una deep copy del dict interno, per non esporre i sotto-dizionari annidati."""
+        return copy.deepcopy(self._new_metrics)
+
+    def set_new_metrics(self, value: Optional[dict]) -> None:
+        """Memorizza una deep copy di value, essendo new_metrics una struttura annidata."""
+        self._new_metrics = copy.deepcopy(value)
