@@ -186,6 +186,69 @@ qc.h(0)
 
 
 @pytest.mark.unit
+def test_check_equivalence_on_identical_circuits_with_measure_all_is_true(
+    facade: QiskitFacade,
+) -> None:
+    # Circuiti con measure_all() finale (stile idq-smelly): le misure vanno rimosse prima del
+    # confronto Statevector, altrimenti Qiskit solleva "Cannot apply instruction with classical
+    # bits". Due circuiti identici che misurano tutti i qubit devono risultare equivalenti.
+    measured_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+qc.cx(0, 1)
+qc.measure_all()
+"""
+
+    assert facade.check_equivalence(measured_source, measured_source) is True
+
+
+@pytest.mark.unit
+def test_check_equivalence_on_identical_circuits_with_per_qubit_measures_is_true(
+    facade: QiskitFacade,
+) -> None:
+    # Misure individuali per singolo qubit (stile idq-fixed), non measure_all: altro pattern di
+    # misura terminale presente nel dataset reale, da gestire allo stesso modo.
+    measured_source = """
+from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
+
+qreg_q = QuantumRegister(2, 'q')
+creg_c = ClassicalRegister(2, 'c')
+qc = QuantumCircuit(qreg_q, creg_c)
+qc.h(qreg_q[0])
+qc.cx(qreg_q[0], qreg_q[1])
+qc.measure(qreg_q[0], creg_c[0])
+qc.measure(qreg_q[1], creg_c[1])
+"""
+
+    assert facade.check_equivalence(measured_source, measured_source) is True
+
+
+@pytest.mark.unit
+def test_check_equivalence_rejects_circuits_with_classical_feedback(
+    facade: QiskitFacade,
+) -> None:
+    # Un circuito con un gate condizionato da un bit classico (if_test, il sostituto di c_if in
+    # Qiskit 2.x) modella feedback classico: non e' rappresentabile come Statevector puro e va
+    # rifiutato esplicitamente, non confrontato silenziosamente.
+    conditional_source = """
+from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
+
+qreg_q = QuantumRegister(1, 'q')
+creg_c = ClassicalRegister(1, 'c')
+qc = QuantumCircuit(qreg_q, creg_c)
+qc.h(qreg_q[0])
+qc.measure(qreg_q[0], creg_c[0])
+with qc.if_test((creg_c, 1)):
+    qc.x(qreg_q[0])
+"""
+
+    with pytest.raises(NotImplementedError, match="feedback"):
+        facade.check_equivalence(conditional_source, conditional_source)
+
+
+@pytest.mark.unit
 def test_calculate_metrics_returns_exactly_abstract_and_physical_keys(
     facade: QiskitFacade,
 ) -> None:

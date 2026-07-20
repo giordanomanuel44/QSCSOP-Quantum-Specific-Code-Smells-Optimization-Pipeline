@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 from qiskit import QuantumCircuit, transpile
+from qiskit.circuit import ControlFlowOp
 from qiskit.providers.fake_provider import GenericBackendV2
 from qiskit.quantum_info import Statevector
 
@@ -83,10 +84,49 @@ class QiskitFacade(IQiskitFacade):
         baseline_circuit = self.isolate_circuit(baseline_code)
         new_circuit = self.isolate_circuit(new_code)
 
-        baseline_state = Statevector.from_instruction(baseline_circuit)
-        new_state = Statevector.from_instruction(new_circuit)
+        # Guardia esplicita PRIMA di toccare qualunque misura: lo Statevector rappresenta lo
+        # stato quantistico PURO e non puo' modellare feedback classico. Un circuito con
+        # istruzioni condizionate da bit classici (c_if legacy / if_test -> control-flow op) e'
+        # fuori scope e non va confrontato silenziosamente.
+        self._reject_classical_feedback(baseline_circuit)
+        self._reject_classical_feedback(new_circuit)
+
+        baseline_state = Statevector.from_instruction(self._strip_measurements(baseline_circuit))
+        new_state = Statevector.from_instruction(self._strip_measurements(new_circuit))
 
         return baseline_state.equiv(new_state)
+
+    @staticmethod
+    def _reject_classical_feedback(circuit: QuantumCircuit) -> None:
+        """Solleva se il circuito contiene istruzioni condizionate da bit classici (fuori scope).
+
+        In Qiskit 2.x il feedback classico (c_if / if_test) e' modellato da control-flow op
+        (IfElseOp, WhileLoopOp, SwitchCaseOp); l'attributo legacy .condition e' controllato in
+        aggiunta per robustezza. Casi del genere non sono confrontabili via Statevector.
+        """
+        for instruction in circuit.data:
+            operation = instruction.operation
+            if isinstance(operation, ControlFlowOp) or getattr(operation, "condition", None):
+                raise NotImplementedError(
+                    "check_equivalence non supporta circuiti con misure intermedie e feedback "
+                    "classico (c_if / if_test) — fuori scope per questo progetto."
+                )
+
+    @staticmethod
+    def _strip_measurements(circuit: QuantumCircuit) -> QuantumCircuit:
+        """Ritorna una copia del circuito senza istruzioni measure, per il confronto Statevector.
+
+        Le misure vengono rimosse OVUNQUE si trovino, non solo se "finali" secondo il DAG:
+        necessario per pattern come misure per-qubit intervallate da barrier (vedi idq-fixed.py),
+        che remove_final_measurements lascerebbe in parte al loro posto. I barrier restano: non
+        hanno effetto sullo stato. La guardia _reject_classical_feedback deve essere gia' passata.
+        """
+        pure_circuit = circuit.copy_empty_like()
+        for instruction in circuit.data:
+            if instruction.operation.name == "measure":
+                continue
+            pure_circuit.append(instruction.operation, instruction.qubits, instruction.clbits)
+        return pure_circuit
 
     def calculate_metrics(self, code: str) -> dict:
         """Isola, transpila e ritorna {"abstractMetrics": {...}, "physicalMetrics": {...}}."""
