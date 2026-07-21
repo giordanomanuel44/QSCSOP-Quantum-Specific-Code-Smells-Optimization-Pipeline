@@ -4,12 +4,13 @@ import sys
 import traceback
 from collections.abc import Generator
 from contextlib import contextmanager
+from itertools import combinations
 from typing import Optional
 
 from qiskit import QuantumCircuit, transpile
 from qiskit.circuit import ControlFlowOp
 from qiskit.providers.fake_provider import GenericBackendV2
-from qiskit.quantum_info import Statevector
+from qiskit.quantum_info import DensityMatrix, Statevector, partial_trace, state_fidelity
 
 from qscsop_pipeline.common.qiskit_facade.interfaces.i_qiskit_facade import IQiskitFacade
 
@@ -22,6 +23,17 @@ class QiskitFacade(IQiskitFacade):
     # parametrico con basis gates e coupling map realistici, equivalente ai fini della transpilazione.
     _DEFAULT_NUM_QUBITS = 5
     _BACKEND_SEED = 42
+
+    # Limite oltre il quale il confronto a dimensioni diverse non viene tentato: la DensityMatrix
+    # cresce come 2^N x 2^N complessi, quindi a 12 qubit occupa gia' ~268 MB (4096^2 * 16 byte) e
+    # raddoppia di esponente ad ogni qubit in piu', diventando rapidamente proibitiva. I circuiti
+    # NISQ di questo dataset stanno ampiamente sotto la soglia: superarla segnala un caso fuori
+    # scope, da rifiutare esplicitamente invece che tentare un'allocazione insostenibile.
+    _MAX_PARTIAL_TRACE_QUBITS = 12
+
+    # Tolleranza sulla fidelity: due stati identici danno 1.0 a meno dell'errore numerico in
+    # virgola mobile accumulato da partial_trace e dalla radice di matrice interna a state_fidelity.
+    _EQUIVALENCE_TOLERANCE = 1e-6
 
     def isolate_circuit(self, source_code: str) -> QuantumCircuit:
         """Esegue source_code in sandbox e ritorna l'ultimo QuantumCircuit assegnato."""
@@ -76,7 +88,11 @@ class QiskitFacade(IQiskitFacade):
         return True, None
 
     def check_equivalence(self, baseline_code: str, new_code: str) -> bool:
-        """Isola entrambi i codici e confronta i rispettivi Statevector.
+        """Isola entrambi i codici e verifica se sono funzionalmente equivalenti.
+
+        A parita' di qubit il confronto e' diretto fra Statevector; se il numero di qubit
+        differisce (caso tipico di una correzione Idle Qubits riuscita, che ne rimuove uno) si
+        passa al confronto via partial_trace, vedi _check_equivalence_across_dimensions.
 
         Il chiamante deve aver gia' verificato compile_circuit(new_code) prima di arrivare qui:
         un'eccezione di isolamento non viene gestita, ma propagata.
@@ -91,10 +107,64 @@ class QiskitFacade(IQiskitFacade):
         self._reject_classical_feedback(baseline_circuit)
         self._reject_classical_feedback(new_circuit)
 
-        baseline_state = Statevector.from_instruction(self._strip_measurements(baseline_circuit))
-        new_state = Statevector.from_instruction(self._strip_measurements(new_circuit))
+        baseline_pure = self._strip_measurements(baseline_circuit)
+        new_pure = self._strip_measurements(new_circuit)
+
+        if baseline_pure.num_qubits != new_pure.num_qubits:
+            return self._check_equivalence_across_dimensions(baseline_pure, new_pure)
+
+        baseline_state = Statevector.from_instruction(baseline_pure)
+        new_state = Statevector.from_instruction(new_pure)
 
         return baseline_state.equiv(new_state)
+
+    @classmethod
+    def _check_equivalence_across_dimensions(
+        cls, first_circuit: QuantumCircuit, second_circuit: QuantumCircuit
+    ) -> bool:
+        """Confronta due circuiti con numero di qubit diverso tracciando via i qubit in eccesso.
+
+        Uno Statevector ha dimensione 2^N: due circuiti con N diverso non sono confrontabili
+        direttamente. Si riduce allora il circuito piu' grande con partial_trace, che risponde
+        esattamente alla domanda "ignorando questi qubit, cosa si osserva sul resto?". Se il qubit
+        tracciato via era davvero idle (non correlato agli altri) la riduzione restituisce
+        esattamente lo stato del circuito piu' piccolo; se era invece entangled, produce uno stato
+        MISTO, distinguibile da qualunque stato puro ridotto — il confronto fallisce correttamente,
+        senza diventare permissivo solo perche' le dimensioni sono cambiate.
+        """
+        larger_circuit, smaller_circuit = (
+            (first_circuit, second_circuit)
+            if first_circuit.num_qubits > second_circuit.num_qubits
+            else (second_circuit, first_circuit)
+        )
+        larger_n = larger_circuit.num_qubits
+        smaller_n = smaller_circuit.num_qubits
+
+        # Controllo PRIMA di costruire qualunque DensityMatrix: oltre la soglia l'allocazione
+        # sarebbe insostenibile, quindi si rifiuta il confronto invece di tentarlo.
+        if larger_n > cls._MAX_PARTIAL_TRACE_QUBITS:
+            raise ValueError(
+                f"Circuito troppo grande per il confronto di equivalenza via partial_trace "
+                f"({larger_n} qubit, limite {cls._MAX_PARTIAL_TRACE_QUBITS}) — "
+                f"validazione non eseguita."
+            )
+
+        larger_state = DensityMatrix.from_instruction(larger_circuit)
+        smaller_state = DensityMatrix.from_instruction(smaller_circuit)
+
+        # SmellReportDTO non porta un indice strutturato di QUALE qubit sia stato rimosso (solo
+        # has_smells e testo libero), quindi si prova esaustivamente ogni combinazione di qubit da
+        # tracciare via: basta che una produca equivalenza. Per circuiti di questa scala il numero
+        # di combinazioni e' minimo (3 per un 3 -> 2 qubit), costo trascurabile.
+        for traced_qubits in combinations(range(larger_n), larger_n - smaller_n):
+            reduced_state = partial_trace(larger_state, list(traced_qubits))
+            # validate=False: partial_trace produce per costruzione uno stato a traccia 1, ma la
+            # verifica interna di Qiskit e' esatta e solleverebbe su deviazioni puramente numeriche.
+            fidelity = state_fidelity(reduced_state, smaller_state, validate=False)
+            if fidelity >= 1.0 - cls._EQUIVALENCE_TOLERANCE:
+                return True
+
+        return False
 
     @staticmethod
     def _reject_classical_feedback(circuit: QuantumCircuit) -> None:

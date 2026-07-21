@@ -18,6 +18,24 @@ _DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "raw" / "thesmellyeig
 _IDQ_SMELLY_PATH = _DATA_DIR / "idq" / "idq-smelly.py"
 _IDQ_FIXED_PATH = _DATA_DIR / "idq" / "idq-fixed.py"
 
+# Output REALE prodotto da RefactorerAgent nell'e2e Idle Qubits (qwen2.5-coder:7b, temperature=0),
+# congelato qui per poter ispezionare check_equivalence sul caso vero senza dipendere da un LLM.
+# Nota: e' gia' noto essere infedele al baseline (sezione 5 del report) — vedi il test diagnostico.
+_REAL_REFACTORED_IDQ_CODE = """from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
+from numpy import pi
+qreg_q = QuantumRegister(2, 'q')
+creg_c = ClassicalRegister(2, 'c')
+qc = QuantumCircuit(qreg_q, creg_c)
+qc.h(qreg_q[0])
+qc.p(pi / 2, qreg_q[0])
+qc.s(qreg_q[0])
+qc.barrier()
+qc.p(pi / 4, qreg_q[1])
+qc.z(qreg_q[1])
+qc.s(qreg_q[1])
+qc.measure_all(add_bits=False)
+"""
+
 
 @pytest.mark.integration
 def test_validation_service_on_real_idle_qubits_circuits_does_not_crash() -> None:
@@ -39,3 +57,30 @@ def test_validation_service_on_real_idle_qubits_circuits_does_not_crash() -> Non
         assert result.get_raw_error_data() is None
     else:
         assert result.get_raw_error_data() is not None
+
+
+@pytest.mark.integration
+def test_check_equivalence_on_real_refactorer_output_is_diagnostic_only() -> None:
+    """Ispezione (non validazione) di check_equivalence sul refactoring reale a 2 qubit.
+
+    Caso DIAGNOSTICO: non si forza alcun esito. Un False qui e' con ogni probabilita' CORRETTO —
+    il refactoring reale prodotto dal 7B ha imperfezioni di fedelta' note (gate legittimi persi
+    rispetto al baseline, sezione 5 del report), quindi il confronto via partial_trace deve
+    rilevarle. Un False NON e' un fallimento del meccanismo a dimensioni diverse: quello e'
+    verificato dagli unit test costruiti apposta.
+    """
+    facade = QiskitFacade()
+    baseline_code = _IDQ_SMELLY_PATH.read_text(encoding="utf-8")
+
+    baseline_qubits = facade.isolate_circuit(baseline_code).num_qubits
+    refactored_qubits = facade.isolate_circuit(_REAL_REFACTORED_IDQ_CODE).num_qubits
+    is_equivalent = facade.check_equivalence(baseline_code, _REAL_REFACTORED_IDQ_CODE)
+
+    print(
+        f"\n[DIAGNOSTICA] baseline={baseline_qubits} qubit, refactored={refactored_qubits} qubit "
+        f"-> check_equivalence = {is_equivalent}"
+    )
+
+    # Unico assert: il confronto a dimensioni diverse deve concludere con un booleano, senza
+    # sollevare. Il valore in se' e' materiale di ispezione, non un criterio di successo.
+    assert isinstance(is_equivalent, bool)

@@ -249,6 +249,94 @@ with qc.if_test((creg_c, 1)):
 
 
 @pytest.mark.unit
+def test_check_equivalence_on_same_qubit_count_still_uses_direct_comparison(
+    facade: QiskitFacade,
+) -> None:
+    # Non-regressione: a parita' di numero di qubit il percorso resta quello Statevector diretto,
+    # invariato rispetto a prima dell'estensione con partial_trace. Equivalenti restano True,
+    # non equivalenti restano False.
+    hadamard_only_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+"""
+
+    assert facade.check_equivalence(BELL_SOURCE, BELL_SOURCE) is True
+    assert facade.check_equivalence(BELL_SOURCE, hadamard_only_source) is False
+
+
+@pytest.mark.unit
+def test_check_equivalence_ignores_a_genuinely_idle_qubit(facade: QiskitFacade) -> None:
+    # Baseline a 3 qubit in cui q2 non riceve ALCUN gate (idle in senso stretto), confrontato con
+    # il circuito a 2 qubit che replica esattamente la logica dei primi due: rimuovere un qubit
+    # mai toccato non cambia nulla di osservabile, quindi devono risultare equivalenti.
+    baseline_with_idle_qubit = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(3)
+qc.h(0)
+qc.cx(0, 1)
+"""
+    reduced_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+qc.cx(0, 1)
+"""
+
+    assert facade.check_equivalence(baseline_with_idle_qubit, reduced_source) is True
+
+
+@pytest.mark.unit
+def test_check_equivalence_rejects_removal_of_an_entangled_qubit(facade: QiskitFacade) -> None:
+    # Baseline GHZ: tutti e tre i qubit sono entangled, nessuno e' idle. Tracciarne via uno
+    # qualsiasi produce uno stato MISTO, mai uguale allo stato puro di Bell a 2 qubit: il
+    # meccanismo non deve diventare permissivo solo perche' le dimensioni sono diverse.
+    ghz_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(3)
+qc.h(0)
+qc.cx(0, 1)
+qc.cx(1, 2)
+"""
+    bell_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+qc.cx(0, 1)
+"""
+
+    assert facade.check_equivalence(ghz_source, bell_source) is False
+
+
+@pytest.mark.unit
+def test_check_equivalence_rejects_circuits_above_the_partial_trace_limit(
+    facade: QiskitFacade,
+) -> None:
+    # Il limite deve scattare PRIMA di costruire la DensityMatrix (2^13 x 2^13 sarebbe ~1 GB):
+    # il test resta istantaneo proprio perche' nessuna matrice viene mai allocata.
+    oversized_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(13)
+qc.h(0)
+"""
+    smaller_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+"""
+
+    with pytest.raises(ValueError, match="13 qubit, limite 12"):
+        facade.check_equivalence(oversized_source, smaller_source)
+
+
+@pytest.mark.unit
 def test_calculate_metrics_returns_exactly_abstract_and_physical_keys(
     facade: QiskitFacade,
 ) -> None:
