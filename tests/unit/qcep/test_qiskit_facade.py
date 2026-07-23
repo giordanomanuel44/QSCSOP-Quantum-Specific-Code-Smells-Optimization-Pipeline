@@ -337,12 +337,25 @@ qc.h(0)
 
 
 @pytest.mark.unit
-def test_calculate_metrics_returns_exactly_abstract_and_physical_keys(
+def test_calculate_metrics_returns_logical_qubits_abstract_and_physical_keys(
     facade: QiskitFacade,
 ) -> None:
     metrics = facade.calculate_metrics(BELL_SOURCE)
 
-    assert set(metrics.keys()) == {"abstractMetrics", "physicalMetrics"}
+    assert set(metrics.keys()) == {"logicalQubits", "abstractMetrics", "physicalMetrics"}
+    assert metrics["logicalQubits"] == 2
     assert metrics["abstractMetrics"] == {"gateCount": 2, "depth": 2}
     assert metrics["physicalMetrics"]["gateCount"] >= metrics["abstractMetrics"]["gateCount"]
     assert metrics["physicalMetrics"]["depth"] >= metrics["abstractMetrics"]["depth"]
+
+
+@pytest.mark.unit
+def test_calculate_metrics_reads_logical_qubits_before_transpilation(
+    facade: QiskitFacade,
+) -> None:
+    # BELL_SOURCE ha 2 qubit, sotto il minimo del backend (_DEFAULT_NUM_QUBITS = 5): se
+    # logicalQubits fosse letto dal circuito POST-transpilazione risulterebbe 5 per via del
+    # padding del backend, non 2. Il test intercetta esattamente questa regressione.
+    metrics = facade.calculate_metrics(BELL_SOURCE)
+
+    assert metrics["logicalQubits"] == 2

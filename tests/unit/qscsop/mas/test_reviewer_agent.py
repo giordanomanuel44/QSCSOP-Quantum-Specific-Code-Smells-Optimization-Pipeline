@@ -73,6 +73,50 @@ def test_review_invokes_crew_once_with_all_arguments(mocker) -> None:
 
 
 @pytest.mark.unit
+def test_review_returns_long_feedback_without_truncation(mocker) -> None:
+    # Il feedback finisce verbatim nel prompt del tentativo successivo: un traceback lungo deve
+    # arrivare intero, senza che review() lo accorci o lo riassuma.
+    long_feedback = (
+        "Il tentativo precedente ha sollevato la seguente eccezione durante la validazione:\n"
+        + "\n".join(
+            f'  File "<string>", line {line}, in <module>\n    qc.cx(qreg_q[0], qreg_q[{line}])'
+            for line in range(1, 15)
+        )
+        + "\nIndexError: list index out of range\n"
+        "Rimuovi solo il qubit inerte e mantieni intatti tutti i gate degli altri qubit, "
+        "aggiornando gli indici usati dalle operazioni a due qubit."
+    )
+    assert len(long_feedback) > 500
+
+    agent = _make_agent()
+    mocker.patch.object(
+        agent,
+        "_run_review_crew",
+        return_value=_ReviewSchema(contextualized_feedback=long_feedback),
+    )
+
+    result = agent.review(_RAW_ERROR, _smell_report())
+
+    assert result == long_feedback
+
+
+@pytest.mark.unit
+def test_review_returns_empty_feedback_verbatim(mocker) -> None:
+    # Nessun placeholder di comodo e nessuna eccezione: il chiamante (futuro MASEngine) deve
+    # poter osservare esattamente cio' che il modello ha prodotto, stringa vuota inclusa.
+    agent = _make_agent()
+    mocker.patch.object(
+        agent,
+        "_run_review_crew",
+        return_value=_ReviewSchema(contextualized_feedback=""),
+    )
+
+    result = agent.review(_RAW_ERROR, _smell_report())
+
+    assert result == ""
+
+
+@pytest.mark.unit
 def test_task_prompt_includes_equivalence_hint_only_on_equivalence_errors(mocker) -> None:
     # Il suggerimento sui gate persi per errore deve comparire solo quando l'errore riguarda
     # davvero l'equivalenza funzionale: su un errore di compilazione sarebbe fuorviante.

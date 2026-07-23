@@ -41,5 +41,8 @@ class IQiskitFacade(ABC):
 
     @abstractmethod
     def calculate_metrics(self, code: str) -> dict:
-        """Isola, transpila e ritorna {"abstractMetrics": {...}, "physicalMetrics": {...}}."""
+        """Isola, transpila e ritorna logicalQubits + abstractMetrics + physicalMetrics.
+
+        Forma: {"logicalQubits": int, "abstractMetrics": {...}, "physicalMetrics": {...}}.
+        """
         raise NotImplementedError

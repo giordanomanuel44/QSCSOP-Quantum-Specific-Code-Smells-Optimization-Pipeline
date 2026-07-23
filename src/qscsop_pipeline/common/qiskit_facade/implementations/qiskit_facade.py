@@ -199,12 +199,22 @@ class QiskitFacade(IQiskitFacade):
         return pure_circuit
 
     def calculate_metrics(self, code: str) -> dict:
-        """Isola, transpila e ritorna {"abstractMetrics": {...}, "physicalMetrics": {...}}."""
+        """Isola, transpila e ritorna logicalQubits + abstractMetrics + physicalMetrics.
+
+        Il payload ha forma:
+        {"logicalQubits": int, "abstractMetrics": {...}, "physicalMetrics": {...}}.
+        """
         qc = self.isolate_circuit(code)
         abstract_metrics = self.get_abstract_metrics(qc)
         transpiled_qc = self.transpile_circuit(qc)
         physical_metrics = self.get_physical_metrics(transpiled_qc)
+        # logicalQubits e' letto dal circuito ISOLATO (qc), non dal transpiled_qc: la
+        # transpilazione padda il circuito ai qubit del backend (almeno _DEFAULT_NUM_QUBITS = 5),
+        # falsando il conteggio logico. E' fratello di abstractMetrics/physicalMetrics, non
+        # contenuto in essi: stessa gerarchia del Listing 1.2 della tesi e della classe
+        # CircuitVersion, dove logical_qubits e' un campo separato dalle due CircuitMetrics.
         return {
+            "logicalQubits": qc.num_qubits,
             "abstractMetrics": abstract_metrics,
             "physicalMetrics": physical_metrics,
         }
