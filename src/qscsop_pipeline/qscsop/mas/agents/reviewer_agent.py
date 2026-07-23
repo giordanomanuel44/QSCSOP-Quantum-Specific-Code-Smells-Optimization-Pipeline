@@ -17,6 +17,7 @@ from crewai import Agent, BaseLLM, Crew, Process, Task
 from pydantic import BaseModel
 
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
+from qscsop_pipeline.qscsop.mas.dto.validation_result_dto import ValidationResultDTO
 from qscsop_pipeline.qscsop.mas.interfaces.i_reviewer_agent import IReviewerAgent
 
 
@@ -26,9 +27,11 @@ class _ReviewSchema(BaseModel):
     contextualized_feedback: str
 
 
-# Sottostringa cercata (case-insensitive) per riconoscere un fallimento di equivalenza funzionale:
-# copre le forme sia inglesi sia italiane ("equivalence", "equivalent", "equivalente"...) senza
-# vincolarsi a un messaggio d'errore specifico.
+# Sottostringa cercata (case-insensitive) per riconoscere un fallimento di equivalenza funzionale
+# TRA i due casi con new_metrics=None (compilazione ed equivalenza sono indistinguibili sulla sola
+# base strutturale del DTO, dato che entrambe azzerano new_metrics): copre le forme sia inglesi
+# sia italiane ("equivalence", "equivalent", "equivalente"...) senza vincolarsi a un messaggio
+# d'errore specifico.
 _EQUIVALENCE_ERROR_MARKER = "equivalen"
 
 # Blocco iniettato solo quando l'errore sembra riguardare l'equivalenza funzionale. Il sospetto
@@ -45,6 +48,24 @@ idle qubit or collapsing a redundant gate sequence, it also silently deleted leg
 belonging to the other qubits. Explicitly consider this possibility in your feedback, and tell \
 the next attempt to touch ONLY what the smell requires and to leave every other operation of the \
 original circuit exactly as it was.
+"""
+
+# Blocco iniettato quando il fallimento e' il nodo "Migliori?" (compilazione ed equivalenza
+# superate, ma nessuna metrica fisica migliorata rispetto alla baseline). Riconoscibile in modo
+# STRUTTURALE (ValidationResultDTO.new_metrics != None), non testuale: e' l'unico dei tre
+# fallimenti in cui il ValidationService calcola con successo le metriche del new_code prima di
+# respingerlo, vedi ValidationService._is_improvement.
+_METRICS_NOT_IMPROVED_HINT_SECTION = """
+ADDITIONAL HINT FOR THIS SPECIFIC FAILURE
+
+This error means the circuit compiled correctly and remained functionally equivalent, but the \
+refactoring attempt did not actually improve anything measurable: the physical gate count, \
+physical depth, and logical qubit count are all unchanged (or worse) compared to the baseline. A \
+common cause is an overly cautious attempt that left the circuit essentially untouched out of \
+fear of breaking equivalence. Explicitly tell the next attempt that it MUST make a real, \
+measurable change that removes or simplifies the reported anomaly -- merely preserving the \
+original circuit is not a valid correction, even if it trivially satisfies compilation and \
+equivalence checks.
 """
 
 _TASK_DESCRIPTION_TEMPLATE = """A refactoring attempt on a Qiskit quantum circuit has just FAILED \
@@ -64,7 +85,7 @@ RAW FAILURE DETAILS (verbatim, from the deterministic validation step)
 
 This raw text may be a Python traceback, a short diagnostic message, or any other technical \
 output: interpret whatever form it takes, and do not assume a fixed format.
-{equivalence_hint_section}
+{hint_section}
 YOUR TASK
 
 Do NOT simply restate the raw error. Explain, in clear and actionable terms:
@@ -108,30 +129,44 @@ class ReviewerAgent(IReviewerAgent):
             verbose=False,
         )
 
-    def review(self, raw_error_details: str, original_smell: SmellReportDTO) -> str:
-        """Contestualizza l'errore rispetto allo smell originale e ritorna il solo feedback."""
-        result = self._run_review_crew(raw_error_details, original_smell)
+    def review(
+        self, validation_result: ValidationResultDTO, original_smell: SmellReportDTO
+    ) -> str:
+        """Contestualizza l'esito di validazione rispetto allo smell originale; ritorna il feedback."""
+        result = self._run_review_crew(validation_result, original_smell)
         return result.contextualized_feedback
 
     def _run_review_crew(
-        self, raw_error_details: str, original_smell: SmellReportDTO
+        self, validation_result: ValidationResultDTO, original_smell: SmellReportDTO
     ) -> _ReviewSchema:
         """Esegue il Crew di review e ritorna l'output strutturato; isola la chiamata all'LLM.
 
         Punto di mock nei test unitari: cosi' i test non istanziano mai un vero Agent/Crew/LLM.
         """
-        # Il suggerimento sui gate persi si inietta solo se l'errore riguarda l'equivalenza:
-        # su un errore di compilazione sarebbe fuorviante.
-        equivalence_hint_section = (
-            _EQUIVALENCE_HINT_SECTION
-            if _EQUIVALENCE_ERROR_MARKER in raw_error_details.lower()
-            else ""
-        )
+        raw_error_details = validation_result.get_raw_error_data()
+
+        # is_valid e' gia' False in ogni chiamata a review() (invocato solo su fallimento): la
+        # sola presenza di new_metrics distingue quindi strutturalmente il fallimento "Migliori?"
+        # (metriche calcolate con successo ma non migliorative, vedi Modifica 1 in
+        # ValidationService) dagli altri due tipi di fallimento (compilazione, equivalenza), dove
+        # new_metrics resta None per costruzione.
+        is_metrics_not_improved_failure = validation_result.get_new_metrics() is not None
+
+        if is_metrics_not_improved_failure:
+            hint_section = _METRICS_NOT_IMPROVED_HINT_SECTION
+        elif _EQUIVALENCE_ERROR_MARKER in raw_error_details.lower():
+            # Tra i due fallimenti con new_metrics=None (compilazione, equivalenza), solo il
+            # contenuto testuale li distingue: il suggerimento sui gate persi si inietta solo se
+            # l'errore riguarda l'equivalenza, mai su un errore di compilazione (fuorviante).
+            hint_section = _EQUIVALENCE_HINT_SECTION
+        else:
+            hint_section = ""
+
         task = Task(
             description=_TASK_DESCRIPTION_TEMPLATE.format(
                 report_details=original_smell.get_report_details(),
                 raw_error_details=raw_error_details,
-                equivalence_hint_section=equivalence_hint_section,
+                hint_section=hint_section,
             ),
             expected_output=_EXPECTED_OUTPUT,
             agent=self._agent,

@@ -11,6 +11,7 @@ from qscsop_pipeline.qscsop.mas.agents.detector_agent import (
     DetectorAgent,
     _SmellDetectionSchema,
 )
+from qscsop_pipeline.qscsop.mas.dto.quantum_smell_type import QuantumSmellType
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
 
 _SAMPLE_CODE = "qc.h(0)\nqc.z(0)\nqc.h(0)\n"
@@ -34,7 +35,7 @@ def test_detect_smell_maps_positive_detection(mocker) -> None:
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
             qubit_operation_analysis="q0: h, z, h",
-            has_smells=True,
+            detected_smell_types=[QuantumSmellType.LONG_CIRCUIT],
             report_details="H-Z-H equivale a X: Long Circuit.",
         ),
     )
@@ -43,6 +44,7 @@ def test_detect_smell_maps_positive_detection(mocker) -> None:
 
     assert isinstance(result, SmellReportDTO)
     assert result.get_has_smells() is True
+    assert result.get_detected_smells() == ["long_circuit"]
     assert result.get_report_details() == "H-Z-H equivale a X: Long Circuit."
 
 
@@ -53,7 +55,9 @@ def test_detect_smell_maps_negative_detection(mocker) -> None:
         agent,
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
-            qubit_operation_analysis="q0: h, z, h", has_smells=False, report_details=""
+            qubit_operation_analysis="q0: h, z, h",
+            detected_smell_types=[],
+            report_details="",
         ),
     )
 
@@ -61,7 +65,34 @@ def test_detect_smell_maps_negative_detection(mocker) -> None:
 
     assert isinstance(result, SmellReportDTO)
     assert result.get_has_smells() is False
+    assert result.get_detected_smells() == []
     assert result.get_report_details() == ""
+
+
+@pytest.mark.unit
+def test_detect_smell_maps_both_smell_types(mocker) -> None:
+    # Il modello puo' segnalare entrambi gli smell contemporaneamente: la lista li deve riportare
+    # tutti come stringhe semplici.
+    agent = _make_agent()
+    mocker.patch.object(
+        agent,
+        "_run_detection_crew",
+        return_value=_SmellDetectionSchema(
+            qubit_operation_analysis="q0..q2 analizzati",
+            detected_smell_types=[
+                QuantumSmellType.LONG_CIRCUIT,
+                QuantumSmellType.IDLE_QUBITS,
+            ],
+            report_details="Entrambi gli smell presenti.",
+        ),
+    )
+
+    result = agent.detect_smell(_SAMPLE_CODE)
+
+    assert result.get_has_smells() is True
+    detected = result.get_detected_smells()
+    assert "long_circuit" in detected
+    assert "idle_qubits" in detected
 
 
 @pytest.mark.unit
@@ -84,7 +115,9 @@ def test_detect_smell_invokes_crew_once_with_code(mocker) -> None:
         agent,
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
-            qubit_operation_analysis="q0: h, z, h", has_smells=False, report_details=""
+            qubit_operation_analysis="q0: h, z, h",
+            detected_smell_types=[],
+            report_details="",
         ),
     )
 
@@ -108,7 +141,9 @@ def test_task_prompt_includes_negative_lc_fixed_example(mocker) -> None:
         def kickoff(self):
             return SimpleNamespace(
                 pydantic=_SmellDetectionSchema(
-                    qubit_operation_analysis="q0: h, z, h", has_smells=False, report_details=""
+                    qubit_operation_analysis="q0: h, z, h",
+                    detected_smell_types=[],
+                    report_details="",
                 ),
                 raw="",
             )
@@ -133,7 +168,7 @@ def test_reasoning_field_stays_internal_and_is_not_exposed_in_dto(mocker) -> Non
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
             qubit_operation_analysis=reasoning,
-            has_smells=False,
+            detected_smell_types=[],
             report_details="Circuito pulito.",
         ),
     )

@@ -23,10 +23,12 @@ def test_detector_agent_detects_smell_on_real_example() -> None:
     result = agent.detect_smell(code)
 
     print("\n[DetectorAgent E2E] report_details:\n" + result.get_report_details())
+    print("[DetectorAgent E2E] detected_smells: " + str(result.get_detected_smells()))
 
     # Il modello dovrebbe riconoscere lo smell nel suo stesso esempio few-shot; se fallisce,
     # e' un segnale utile sulla qualita' del prompt/modello da rivedere.
     assert result.get_has_smells() is True
+    assert "long_circuit" in result.get_detected_smells()
 
 
 @pytest.mark.e2e
@@ -38,11 +40,13 @@ def test_detector_agent_reports_clean_on_fixed_circuit() -> None:
     result = agent.detect_smell(code)
 
     print("\n[DetectorAgent E2E clean] report_details:\n" + result.get_report_details())
+    print("[DetectorAgent E2E clean] detected_smells: " + str(result.get_detected_smells()))
 
     # Circuito gia' corretto (lo smell H-Z-H e' stato sostituito da X): non deve piu' essere
     # segnalato. Se qui esce True, e' un segnale reale sul bias/qualita' del prompt da discutere,
     # NON da nascondere aggiustando il test.
     assert result.get_has_smells() is False
+    assert result.get_detected_smells() == []
 
 
 @pytest.mark.e2e
@@ -54,6 +58,7 @@ def test_detector_agent_reports_clean_on_fixed_idle_qubits_circuit() -> None:
     result = agent.detect_smell(code)
 
     print("\n[DetectorAgent E2E clean IDQ] report_details:\n" + result.get_report_details())
+    print("[DetectorAgent E2E clean IDQ] detected_smells: " + str(result.get_detected_smells()))
 
     # Versione corretta del caso Idle Qubits: ogni qubit e' ora effettivamente misurato e
     # contribuisce al risultato, quindi non deve piu' essere segnalato. Simmetrico al test su

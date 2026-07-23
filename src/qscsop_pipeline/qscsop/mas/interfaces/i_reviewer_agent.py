@@ -3,16 +3,21 @@
 from abc import ABC, abstractmethod
 
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
+from qscsop_pipeline.qscsop.mas.dto.validation_result_dto import ValidationResultDTO
 
 
 class IReviewerAgent(ABC):
-    """Astrae la traduzione di un errore di validazione grezzo in feedback azionabile."""
+    """Astrae la traduzione di un esito di validazione fallito in feedback azionabile."""
 
     @abstractmethod
-    def review(self, raw_error_details: str, original_smell: SmellReportDTO) -> str:
-        """Contestualizza raw_error_details rispetto a original_smell; ritorna il feedback.
+    def review(
+        self, validation_result: ValidationResultDTO, original_smell: SmellReportDTO
+    ) -> str:
+        """Contestualizza validation_result rispetto a original_smell; ritorna il feedback.
 
-        L'output e' testo libero (non un DTO, coerente con il class diagram): va iniettato
-        direttamente come review_feedback nel tentativo successivo del RefactorerAgent.
+        L'input e' l'intero ValidationResultDTO prodotto dal ValidationService (sezione "Gli
+        Agenti e le loro Responsabilita'" della tesi), non solo il suo raw_error_data. L'output
+        resta testo libero (non un DTO, coerente con il class diagram): va iniettato direttamente
+        come review_feedback nel tentativo successivo del RefactorerAgent.
         """
         raise NotImplementedError

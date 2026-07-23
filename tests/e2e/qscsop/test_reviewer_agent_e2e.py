@@ -18,6 +18,8 @@ from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
 from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import RefactorerAgent
 from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import ReviewerAgent
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
+from qscsop_pipeline.qscsop.mas.dto.validation_result_dto import ValidationResultDTO
+from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
 
 # tests/e2e/qscsop/ -> risali a root repo, poi al file smelly usato come baseline reale.
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "raw" / "thesmellyeight"
@@ -31,22 +33,25 @@ def test_reviewer_agent_contextualizes_a_real_validation_failure() -> None:
     refactorer = RefactorerAgent(llm=llm)
     reviewer = ReviewerAgent(llm=llm)
     facade = QiskitFacade()
+    validation_service = ValidationService(facade=facade)
 
     baseline_code = _IDQ_SMELLY_PATH.read_text(encoding="utf-8")
     smell_report = detector.detect_smell(baseline_code)
     refactored_code = refactorer.refactor(baseline_code, smell_report, review_feedback="")
 
-    # Errore grezzo costruito dall'esito reale della validazione, come farebbe il MASEngine.
-    is_equivalent = facade.check_equivalence(baseline_code, refactored_code)
-    raw_error_details = (
-        "Il circuito refattorizzato non e' funzionalmente equivalente al baseline."
-        if not is_equivalent
-        else "Il circuito refattorizzato ha superato la verifica di equivalenza."
-    )
-    print(f"\n[ReviewerAgent E2E] check_equivalence={is_equivalent}")
-    print(f"[ReviewerAgent E2E] raw_error_details: {raw_error_details}")
+    # ValidationResultDTO reale, prodotto dal ValidationService vero, come farebbe il MASEngine.
+    validation_result = validation_service.validate(baseline_code, refactored_code)
+    print(f"\n[ReviewerAgent E2E] is_valid={validation_result.get_is_valid()}")
+    print(f"[ReviewerAgent E2E] raw_error_data: {validation_result.get_raw_error_data()}")
 
-    feedback = reviewer.review(raw_error_details, smell_report)
+    if validation_result.get_is_valid():
+        print(
+            "[ReviewerAgent E2E] Il refactoring e' gia' valido: nessun errore da contestualizzare "
+            "in questa esecuzione."
+        )
+        return
+
+    feedback = reviewer.review(validation_result, smell_report)
 
     print("[ReviewerAgent E2E] feedback:\n" + feedback)
 
@@ -73,8 +78,14 @@ def test_reviewer_agent_contextualizes_a_compilation_failure() -> None:
     smell_report = SmellReportDTO(
         has_smells=True, report_details="Qubit 2 non contribuisce al risultato: Idle Qubits."
     )
+    # Fallimento di compilazione fabbricato (ValidationService non e' invocato qui apposta: serve
+    # un new_code sintatticamente rotto, che compile_circuit intercetterebbe prima di arrivare a
+    # questo punto): new_metrics=None per costruzione, come per un vero fallimento di compilazione.
+    validation_result = ValidationResultDTO(
+        is_valid=False, raw_error_data=_SYNTAX_ERROR_DETAILS, new_metrics=None
+    )
 
-    feedback = reviewer.review(_SYNTAX_ERROR_DETAILS, smell_report)
+    feedback = reviewer.review(validation_result, smell_report)
 
     print("\n[ReviewerAgent E2E syntax] raw_error_details:\n" + _SYNTAX_ERROR_DETAILS)
     print("[ReviewerAgent E2E syntax] feedback:\n" + feedback)

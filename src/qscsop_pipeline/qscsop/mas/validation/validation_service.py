@@ -59,10 +59,18 @@ class ValidationService(IValidationService):
             baseline_metrics = self._get_baseline_metrics(baseline_code)
 
             if not self._is_improvement(baseline_metrics, metrics):
+                # A differenza degli altri due fallimenti (compilazione, equivalenza), qui
+                # metrics e' gia' stato calcolato con successo su un circuito compilabile ed
+                # equivalente al baseline: scartarlo sarebbe buttare un dato valido. new_metrics
+                # popolato E' il segnale strutturale che identifica questo specifico tipo di
+                # fallimento ("Migliori?" non superato) rispetto agli altri due, dove resta None
+                # per costruzione (non esiste alcun new_code compilato/equivalente da misurare).
+                # Nessun consumatore deve pero' interpretare new_metrics!=None come "successo":
+                # solo is_valid lo garantisce.
                 return ValidationResultDTO(
                     is_valid=False,
                     raw_error_data=self._format_not_improved_error(baseline_metrics, metrics),
-                    new_metrics=None,
+                    new_metrics=metrics,
                 )
 
             return ValidationResultDTO(is_valid=True, raw_error_data=None, new_metrics=metrics)

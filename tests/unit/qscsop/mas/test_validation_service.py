@@ -140,7 +140,10 @@ def test_validate_rejects_identity_refactoring() -> None:
     result = ValidationService(facade=facade).validate(BASELINE_CODE, NEW_CODE)
 
     assert result.get_is_valid() is False
-    assert result.get_new_metrics() is None
+    # A differenza degli altri due fallimenti, qui new_metrics NON e' None: il new_code e' stato
+    # compilato, verificato equivalente e le sue metriche calcolate con successo, solo il
+    # criterio "Migliori?" non e' soddisfatto. Scartare quel dato sarebbe uno spreco.
+    assert result.get_new_metrics() == BASELINE_METRICS
     error = result.get_raw_error_data()
     assert error is not None
     assert "gateCount=10" in error
@@ -178,7 +181,9 @@ def test_validate_rejects_pareto_violation() -> None:
     result = ValidationService(facade=facade).validate(BASELINE_CODE, NEW_CODE)
 
     assert result.get_is_valid() is False
-    assert result.get_new_metrics() is None
+    # Anche qui le metriche sono state calcolate con successo: new_metrics riporta quelle del
+    # new_code che ha violato Pareto, non None.
+    assert result.get_new_metrics() == pareto_violation
 
 
 @pytest.mark.unit

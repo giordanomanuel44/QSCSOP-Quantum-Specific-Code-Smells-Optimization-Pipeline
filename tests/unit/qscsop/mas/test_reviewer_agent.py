@@ -11,6 +11,7 @@ from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import (
     _ReviewSchema,
 )
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
+from qscsop_pipeline.qscsop.mas.dto.validation_result_dto import ValidationResultDTO
 
 _RAW_ERROR = "Il circuito refattorizzato non e' funzionalmente equivalente al baseline."
 _FEEDBACK = (
@@ -30,6 +31,24 @@ def _smell_report() -> SmellReportDTO:
     )
 
 
+def _equivalence_failure(raw_error_details: str = _RAW_ERROR) -> ValidationResultDTO:
+    """Fallimento di equivalenza (o compilazione): new_metrics=None, come costruisce ValidationService."""
+    return ValidationResultDTO(is_valid=False, raw_error_data=raw_error_details, new_metrics=None)
+
+
+def _metrics_not_improved_failure() -> ValidationResultDTO:
+    """Fallimento del nodo "Migliori?": new_metrics popolato, come da Modifica 1 di ValidationService."""
+    return ValidationResultDTO(
+        is_valid=False,
+        raw_error_data="Il refactoring non ha migliorato le metriche fisiche rispetto alla baseline.",
+        new_metrics={
+            "logicalQubits": 3,
+            "abstractMetrics": {"gateCount": 5, "depth": 4},
+            "physicalMetrics": {"gateCount": 10, "depth": 8},
+        },
+    )
+
+
 @pytest.mark.unit
 def test_review_returns_contextualized_feedback(mocker) -> None:
     agent = _make_agent()
@@ -39,7 +58,7 @@ def test_review_returns_contextualized_feedback(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=_FEEDBACK),
     )
 
-    result = agent.review(_RAW_ERROR, _smell_report())
+    result = agent.review(_equivalence_failure(), _smell_report())
 
     assert result == _FEEDBACK
 
@@ -54,22 +73,23 @@ def test_review_propagates_parsing_failure(mocker) -> None:
     )
 
     with pytest.raises(RuntimeError, match="output non conforme allo schema"):
-        agent.review(_RAW_ERROR, _smell_report())
+        agent.review(_equivalence_failure(), _smell_report())
 
 
 @pytest.mark.unit
 def test_review_invokes_crew_once_with_all_arguments(mocker) -> None:
     agent = _make_agent()
     report = _smell_report()
+    validation_result = _equivalence_failure()
     run_mock = mocker.patch.object(
         agent,
         "_run_review_crew",
         return_value=_ReviewSchema(contextualized_feedback=_FEEDBACK),
     )
 
-    agent.review(_RAW_ERROR, report)
+    agent.review(validation_result, report)
 
-    run_mock.assert_called_once_with(_RAW_ERROR, report)
+    run_mock.assert_called_once_with(validation_result, report)
 
 
 @pytest.mark.unit
@@ -95,7 +115,7 @@ def test_review_returns_long_feedback_without_truncation(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=long_feedback),
     )
 
-    result = agent.review(_RAW_ERROR, _smell_report())
+    result = agent.review(_equivalence_failure(), _smell_report())
 
     assert result == long_feedback
 
@@ -111,16 +131,13 @@ def test_review_returns_empty_feedback_verbatim(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=""),
     )
 
-    result = agent.review(_RAW_ERROR, _smell_report())
+    result = agent.review(_equivalence_failure(), _smell_report())
 
     assert result == ""
 
 
-@pytest.mark.unit
-def test_task_prompt_includes_equivalence_hint_only_on_equivalence_errors(mocker) -> None:
-    # Il suggerimento sui gate persi per errore deve comparire solo quando l'errore riguarda
-    # davvero l'equivalenza funzionale: su un errore di compilazione sarebbe fuorviante.
-    agent = _make_agent()
+def _capture_task(mocker, agent: ReviewerAgent) -> dict:
+    """Intercetta la creazione del Crew per catturare il Task senza chiamare un LLM reale."""
     captured: dict = {}
 
     class _FakeCrew:
@@ -133,11 +150,21 @@ def test_task_prompt_includes_equivalence_hint_only_on_equivalence_errors(mocker
             )
 
     mocker.patch("qscsop_pipeline.qscsop.mas.agents.reviewer_agent.Crew", _FakeCrew)
+    return captured
 
-    agent.review(_RAW_ERROR, _smell_report())
+
+@pytest.mark.unit
+def test_task_prompt_includes_equivalence_hint_only_on_equivalence_errors(mocker) -> None:
+    # Il suggerimento sui gate persi per errore deve comparire solo quando l'errore riguarda
+    # davvero l'equivalenza funzionale: su un errore di compilazione sarebbe fuorviante.
+    agent = _make_agent()
+    captured = _capture_task(mocker, agent)
+
+    agent.review(_equivalence_failure(), _smell_report())
     assert "ADDITIONAL HINT FOR THIS SPECIFIC FAILURE" in captured["task"].description
+    assert "FUNCTIONAL EQUIVALENCE" in captured["task"].description
 
-    agent.review("SyntaxError: invalid syntax", _smell_report())
+    agent.review(_equivalence_failure("SyntaxError: invalid syntax"), _smell_report())
     assert "ADDITIONAL HINT FOR THIS SPECIFIC FAILURE" not in captured["task"].description
 
 
@@ -147,21 +174,59 @@ def test_task_prompt_carries_raw_error_and_original_smell(mocker) -> None:
     # smell che il refactoring stava cercando di correggere.
     agent = _make_agent()
     report = _smell_report()
-    captured: dict = {}
+    captured = _capture_task(mocker, agent)
 
-    class _FakeCrew:
-        def __init__(self, agents, tasks, process) -> None:
-            captured["task"] = tasks[0]
-
-        def kickoff(self):
-            return SimpleNamespace(
-                pydantic=_ReviewSchema(contextualized_feedback=_FEEDBACK), raw=""
-            )
-
-    mocker.patch("qscsop_pipeline.qscsop.mas.agents.reviewer_agent.Crew", _FakeCrew)
-
-    agent.review(_RAW_ERROR, report)
+    agent.review(_equivalence_failure(), report)
 
     description = captured["task"].description
     assert _RAW_ERROR in description
     assert report.get_report_details() in description
+
+
+@pytest.mark.unit
+def test_task_prompt_includes_metrics_not_improved_hint_when_new_metrics_is_populated(
+    mocker,
+) -> None:
+    # Quando new_metrics NON e' None (fallimento del nodo "Migliori?"), va iniettato
+    # _METRICS_NOT_IMPROVED_HINT_SECTION, mai _EQUIVALENCE_HINT_SECTION.
+    agent = _make_agent()
+    captured = _capture_task(mocker, agent)
+
+    agent.review(_metrics_not_improved_failure(), _smell_report())
+
+    description = captured["task"].description
+    assert "did not actually improve anything measurable" in description
+    assert "FUNCTIONAL EQUIVALENCE" not in description
+
+
+@pytest.mark.unit
+def test_task_prompt_includes_equivalence_hint_when_new_metrics_is_none_and_error_mentions_it(
+    mocker,
+) -> None:
+    # new_metrics=None e raw_error_data che menziona "equivalen...": comportamento esistente,
+    # ora guidato anche dal controllo strutturale su new_metrics=None (non solo dalla sottostringa).
+    agent = _make_agent()
+    captured = _capture_task(mocker, agent)
+
+    agent.review(_equivalence_failure(), _smell_report())
+
+    description = captured["task"].description
+    assert "FUNCTIONAL EQUIVALENCE" in description
+    assert "did not actually improve anything measurable" not in description
+
+
+@pytest.mark.unit
+def test_task_prompt_injects_no_special_hint_on_compilation_failure(mocker) -> None:
+    # new_metrics=None e raw_error_data che sembra un errore di compilazione: nessuno dei due
+    # hint speciali deve comparire.
+    agent = _make_agent()
+    captured = _capture_task(mocker, agent)
+
+    compilation_failure = _equivalence_failure(
+        'Traceback (most recent call last):\n  File "<string>", line 3\nSyntaxError: invalid syntax'
+    )
+    agent.review(compilation_failure, _smell_report())
+
+    description = captured["task"].description
+    assert "FUNCTIONAL EQUIVALENCE" not in description
+    assert "did not actually improve anything measurable" not in description

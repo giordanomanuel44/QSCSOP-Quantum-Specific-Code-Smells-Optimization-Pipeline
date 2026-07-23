@@ -8,6 +8,7 @@ il report_details generato ne eredita la lingua. Scelta documentata anche in CLA
 from crewai import Agent, BaseLLM, Crew, Process, Task
 from pydantic import BaseModel
 
+from qscsop_pipeline.qscsop.mas.dto.quantum_smell_type import QuantumSmellType
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
 from qscsop_pipeline.qscsop.mas.interfaces.i_detector_agent import IDetectorAgent
 
@@ -19,12 +20,14 @@ class _SmellDetectionSchema(BaseModel):
     # ragionamento (chain-of-thought) prima di impegnarsi sul verdetto, non a posteriori.
     # Questo campo resta interno: non viene mai propagato in SmellReportDTO.
     qubit_operation_analysis: str
-    has_smells: bool
+    # Il modello sceglie zero, uno o entrambi i valori vincolati di QuantumSmellType (lista vuota
+    # se nessuno smell): has_smells non e' piu' chiesto separatamente, ma DERIVATO in detect_smell.
+    detected_smell_types: list[QuantumSmellType]
     report_details: str
 
 
-# Few-shot POSITIVI (has_smells=True): contenuto integrale dei due esempi del dataset
-# TheSmellyEight, uno per smell in scope.
+# Few-shot POSITIVI (detected_smell_types non vuoto): contenuto integrale dei due esempi del
+# dataset TheSmellyEight, uno per smell in scope.
 _LC_SMELLY_EXAMPLE = """from qiskit import QuantumCircuit
 from numpy import pi
 
@@ -82,9 +85,9 @@ qc = transpile(qc, basis_gates=['u1', 'u2', 'u3', 'rz', 'sx', 'x', 'cx', 'id'], 
 # Draw
 """
 
-# Few-shot NEGATIVO (has_smells=False): versione corretta reale dello stesso circuito di
-# _LC_SMELLY_EXAMPLE, per insegnare al modello a distinguere il "prima" dal "dopo" sullo stesso
-# caso ed evitare il bias verso True indotto da soli esempi positivi.
+# Few-shot NEGATIVO (detected_smell_types vuoto): versione corretta reale dello stesso circuito
+# di _LC_SMELLY_EXAMPLE, per insegnare al modello a distinguere il "prima" dal "dopo" sullo stesso
+# caso ed evitare il bias verso il rilevamento indotto da soli esempi positivi.
 _LC_FIXED_EXAMPLE = """from qiskit import QuantumCircuit
 from numpy import pi
 
@@ -124,7 +127,7 @@ The circuit declares/allocates qubits that are never involved in any meaningful 
 (no gate and no measurement), or whose net effect on the final result is negligible \
 ("wasted" qubits that occupy hardware resources without contributing to the computation).
 
-EXAMPLES OF CIRCUITS WITH A SMELL (has_smells = true)
+EXAMPLES OF CIRCUITS WITH A SMELL (detected_smell_types is non-empty)
 
 Example A -- LONG CIRCUIT:
 ```python
@@ -143,16 +146,16 @@ outcome distribution, so those operations are effectively wasted: the qubits are
 touched but contribute no observable information to the result, which is the essence of the \
 Idle Qubits smell.
 
-EXAMPLE OF A CLEAN CIRCUIT (has_smells = false)
+EXAMPLE OF A CLEAN CIRCUIT (detected_smell_types is empty)
 
 Example C -- SAME CIRCUIT FAMILY AS EXAMPLE A, AFTER THE SMELL WAS FIXED:
 ```python
 {lc_fixed_example}```
 Why it is clean: this is the corrected version of Example A. The redundant H-Z-H sequence has \
 been replaced by the single equivalent X gate, so there is no redundancy left to simplify and \
-the one qubit is actively used. There is no remaining anomaly to report: has_smells must be \
-false. Do not flag a circuit as smelly just because earlier examples were smelly -- judge each \
-circuit on its own merits.
+the one qubit is actively used. There is no remaining anomaly to report: detected_smell_types \
+must be an empty list. Do not flag a circuit as smelly just because earlier examples were smelly \
+-- judge each circuit on its own merits.
 
 CIRCUIT TO ANALYZE
 ```python
@@ -168,16 +171,20 @@ if, after this explicit listing, it turns out to have zero meaningful operations
 that a qubit is unused without having first listed its operations: if you find even a single \
 gate or measurement involving it, it is NOT an idle qubit.
 
-Only after completing qubit_operation_analysis, decide has_smells (true or false) and write in \
-report_details a concise technical explanation of which smell(s) you found and where (or, if \
-none, why the circuit is clean). Respond ONLY with the required structured object, with no extra \
-text outside the requested format."""
+Only after completing qubit_operation_analysis, populate detected_smell_types with the smells \
+you found: choose zero, one, or both of the ONLY two allowed values -- "long_circuit" and \
+"idle_qubits". Use an empty list if the circuit is clean, ["long_circuit"] or ["idle_qubits"] \
+for a single smell, and both values if the circuit exhibits both. Then write in report_details a \
+concise technical explanation of which smell(s) you found and where (or, if none, why the circuit \
+is clean). Respond ONLY with the required structured object, with no extra text outside the \
+requested format."""
 
 _EXPECTED_OUTPUT = (
     "A structured object with three fields, in this order: qubit_operation_analysis "
-    "(step-by-step listing of every qubit and the operations involving it), has_smells "
-    "(boolean), and report_details (string describing the detected smell(s) or why the "
-    "circuit is clean)."
+    "(step-by-step listing of every qubit and the operations involving it), "
+    "detected_smell_types (a list containing zero, one, or both of the allowed values "
+    '"long_circuit" and "idle_qubits"), and report_details (string describing the detected '
+    "smell(s) or why the circuit is clean)."
 )
 
 
@@ -203,10 +210,16 @@ class DetectorAgent(IDetectorAgent):
 
     def detect_smell(self, code: str) -> SmellReportDTO:
         """Analizza code e mappa l'esito strutturato dell'agente in un SmellReportDTO."""
-        result = self._run_detection_crew(code)
+        schema = self._run_detection_crew(code)
+        # has_smells e' DERIVATO dalla lista, non richiesto separatamente al modello: elimina per
+        # costruzione la possibilita' di una risposta internamente contraddittoria (es.
+        # has_smells=True con lista vuota, o viceversa).
+        has_smells = bool(schema.detected_smell_types)
+        detected_smells = [smell_type.value for smell_type in schema.detected_smell_types]
         return SmellReportDTO(
-            has_smells=result.has_smells,
-            report_details=result.report_details,
+            has_smells=has_smells,
+            report_details=schema.report_details,
+            detected_smells=detected_smells,
         )
 
     def _run_detection_crew(self, code: str) -> _SmellDetectionSchema:
