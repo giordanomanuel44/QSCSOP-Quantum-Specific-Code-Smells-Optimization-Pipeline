@@ -9,8 +9,6 @@ venv/
 .env
 
 # Dati e output pesanti
-data/interim/*
-data/processed/*
 outputs/reports/*
 !data/raw/.gitkeep
 !data/interim/.gitkeep
