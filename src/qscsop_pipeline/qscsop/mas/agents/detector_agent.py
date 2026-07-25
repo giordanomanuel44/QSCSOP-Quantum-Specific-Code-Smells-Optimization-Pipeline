@@ -16,14 +16,22 @@ from qscsop_pipeline.qscsop.mas.interfaces.i_detector_agent import IDetectorAgen
 class _SmellDetectionSchema(BaseModel):
     """Schema Pydantic interno: solo tramite per l'output strutturato di CrewAI (non esposto)."""
 
-    # L'ordine dei campi conta: qubit_operation_analysis e' PRIMO cosi' il modello genera il
-    # ragionamento (chain-of-thought) prima di impegnarsi sul verdetto, non a posteriori.
-    # Questo campo resta interno: non viene mai propagato in SmellReportDTO.
+    # L'ordine dei campi conta: in generazione autoregressiva ogni campo e' condizionato solo su
+    # quelli che lo precedono, quindi l'ordine qui sotto e' l'ordine di ragionamento imposto al
+    # modello, non solo la forma dello schema.
+    # 1. qubit_operation_analysis e' PRIMO cosi' il modello genera il ragionamento per-qubit
+    #    (chain-of-thought) prima di impegnarsi su qualunque verdetto. Campo interno: non viene
+    #    mai propagato in SmellReportDTO.
     qubit_operation_analysis: str
-    # Il modello sceglie zero, uno o entrambi i valori vincolati di QuantumSmellType (lista vuota
-    # se nessuno smell): has_smells non e' piu' chiesto separatamente, ma DERIVATO in detect_smell.
-    detected_smell_types: list[QuantumSmellType]
+    # 2. report_details e' SECONDO: il modello articola qui la conclusione discorsiva (quale smell,
+    #    se presente, e perche') basandosi sull'analisi appena scritta, prima di dover scegliere i
+    #    valori formali della lista.
     report_details: str
+    # 3. detected_smell_types e' ULTIMO: deve limitarsi a formalizzare in valori vincolati di
+    #    QuantumSmellType la conclusione gia' articolata in report_details (lista vuota se nessuno
+    #    smell), non essere un giudizio indipendente. has_smells non e' chiesto separatamente, ma
+    #    DERIVATO da questa lista in detect_smell.
+    detected_smell_types: list[QuantumSmellType]
 
 
 # Few-shot POSITIVI (detected_smell_types non vuoto): contenuto integrale dei due esempi del
@@ -127,6 +135,12 @@ The circuit declares/allocates qubits that are never involved in any meaningful 
 (no gate and no measurement), or whose net effect on the final result is negligible \
 ("wasted" qubits that occupy hardware resources without contributing to the computation).
 
+IMPORTANT: if the circuit contains NO measurement instruction at all, judge Idle Qubits ONLY \
+by whether a qubit receives ANY gate. A qubit that receives at least one gate (even a single \
+one) is NOT idle, regardless of whether the circuit ever measures it -- the absence of a \
+measurement is a property of the whole circuit, not evidence that a specific qubit is unused. \
+Only flag a qubit as idle if it receives literally zero gates.
+
 EXAMPLES OF CIRCUITS WITH A SMELL (detected_smell_types is non-empty)
 
 Example A -- LONG CIRCUIT:
@@ -139,12 +153,33 @@ count and depth for no benefit.
 Example B -- IDLE QUBITS:
 ```python
 {idq_example}```
-Why it is a smell: each of the three qubits receives, after an initial Hadamard, only \
-phase-type rotations (p, z=p(pi), s=p(pi/2)) and is then measured directly in the computational \
-basis. Phase rotations applied right before a Z-basis measurement do not change the measurement \
-outcome distribution, so those operations are effectively wasted: the qubits are allocated and \
-touched but contribute no observable information to the result, which is the essence of the \
-Idle Qubits smell.
+Why it is a smell: qubit 2 receives TWO Hadamard gates in a row (qc.h(qreg_q) applies H to all \
+qubits including q2, then qc.h(qreg_q[2]) applies a second H to q2 specifically). Two \
+consecutive H gates on the same qubit cancel out exactly, leaving q2 in state |0> -- \
+deterministically, with no superposition. Every phase-type gate applied to q2 afterward (p, z, \
+s) acts on a state that is already |0>, so q2's measurement outcome is fixed and 100% \
+predictable: it carries zero information about the computation. This is what makes q2 an Idle \
+Qubit -- not merely that its phase gates are 'wasted' in isolation (that is true of phase gates \
+before a Z-basis measurement in general, on any qubit, smelly or not), but that q2's final \
+outcome is deterministic and uninformative because of the redundant double-Hadamard. \
+IMPORTANT DISTINCTION: 'deterministic outcome' alone is NOT the criterion for Idle Qubits. A \
+single meaningful gate (like a lone X, or any single non-self-cancelling gate) also produces a \
+deterministic outcome, yet it performs a real, non-trivial operation on the qubit -- it is NOT \
+idle. What makes q2 idle here is specifically that its net sequence of gates is EQUIVALENT TO \
+THE IDENTITY: two consecutive H gates cancel out exactly, so q2 ends up in exactly the same \
+state it started in, as if untouched. When judging Idle Qubits, ask: does this qubit's sequence \
+of gates, taken together, amount to doing NOTHING NET (a no-op, like H followed by H, or any \
+gate immediately undone by its own inverse) -- that is idle. A qubit receiving a single gate \
+that performs a real transformation (flips the state, rotates it into superposition, etc.) is \
+NEVER idle, even though its resulting state may be perfectly predictable.
+
+CONTRAST WITH EXAMPLE A/C: the X gate in Example C (the fixed version of Example A) is the \
+OPPOSITE case: a single, meaningful, non-cancelling gate. Do not confuse it with q2's \
+double-Hadamard case above -- a lone X gate is real work, not redundancy. If you find yourself \
+citing the double-Hadamard reasoning to justify flagging a DIFFERENT circuit that does not \
+itself contain two cancelling gates on the same qubit, you are misapplying the example: \
+re-check the actual gate sequence of the qubit you are judging, in the circuit under analysis, \
+not in a previous example.
 
 EXAMPLE OF A CLEAN CIRCUIT (detected_smell_types is empty)
 
@@ -156,6 +191,11 @@ been replaced by the single equivalent X gate, so there is no redundancy left to
 the one qubit is actively used. There is no remaining anomaly to report: detected_smell_types \
 must be an empty list. Do not flag a circuit as smelly just because earlier examples were smelly \
 -- judge each circuit on its own merits.
+
+NOTE: the presence of phase-type gates (p, z, s) right before a measurement is NEVER by itself \
+evidence of Idle Qubits -- it is normal and appears in both smelly and correctly-fixed circuits \
+of this dataset. Judge Idle Qubits only by whether the qubit's final outcome is deterministic \
+due to redundancy, as explained above.
 
 CIRCUIT TO ANALYZE
 ```python
@@ -171,20 +211,22 @@ if, after this explicit listing, it turns out to have zero meaningful operations
 that a qubit is unused without having first listed its operations: if you find even a single \
 gate or measurement involving it, it is NOT an idle qubit.
 
-Only after completing qubit_operation_analysis, populate detected_smell_types with the smells \
-you found: choose zero, one, or both of the ONLY two allowed values -- "long_circuit" and \
-"idle_qubits". Use an empty list if the circuit is clean, ["long_circuit"] or ["idle_qubits"] \
-for a single smell, and both values if the circuit exhibits both. Then write in report_details a \
-concise technical explanation of which smell(s) you found and where (or, if none, why the circuit \
-is clean). Respond ONLY with the required structured object, with no extra text outside the \
-requested format."""
+Only after completing qubit_operation_analysis, write report_details: a concise technical \
+explanation of which smell(s) you found and where, or, if the circuit is clean, why it is clean. \
+THEN, as the very last step, populate detected_smell_types so that it EXACTLY MATCHES the \
+conclusion you just wrote in report_details: if report_details says the circuit is clean or that \
+no anomaly was found, detected_smell_types MUST be an empty list. If report_details describes a \
+Long Circuit, include "long_circuit". If it describes Idle Qubits, include "idle_qubits". Never \
+emit a detected_smell_types value that contradicts your own report_details -- the list is a \
+formalization of the verdict you just articulated, not an independent judgment. Respond ONLY \
+with the required structured object, with no extra text outside the requested format."""
 
 _EXPECTED_OUTPUT = (
     "A structured object with three fields, in this order: qubit_operation_analysis "
-    "(step-by-step listing of every qubit and the operations involving it), "
+    "(step-by-step listing of every qubit and the operations involving it), report_details "
+    "(string describing the detected smell(s) or why the circuit is clean), and "
     "detected_smell_types (a list containing zero, one, or both of the allowed values "
-    '"long_circuit" and "idle_qubits"), and report_details (string describing the detected '
-    "smell(s) or why the circuit is clean)."
+    '"long_circuit" and "idle_qubits", exactly matching the conclusion in report_details).'
 )
 
 

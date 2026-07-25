@@ -21,4 +21,4 @@ outputs/reports/*
 
 *.egg-info/
 CLAUDE.local.md
-.idea/
+
