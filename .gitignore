@@ -9,7 +9,6 @@ venv/
 .env
 
 # Dati e output pesanti
-data/raw/*
 data/interim/*
 data/processed/*
 outputs/reports/*
