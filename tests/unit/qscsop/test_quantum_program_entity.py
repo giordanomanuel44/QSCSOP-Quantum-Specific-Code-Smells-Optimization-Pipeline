@@ -3,6 +3,7 @@ import pytest
 from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
 from qscsop_pipeline.qscsop.entities.evaluation_data import EvaluationData
+from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgramEntity
 
 
@@ -32,7 +33,7 @@ def test_creation_has_no_refactored_key_and_default_evaluation() -> None:
     assert "refactored" not in result
     assert entity.get_refactored() is None
     assert entity.get_evaluation() is not None
-    assert entity.get_evaluation().get_status() == "PROCESSING"
+    assert entity.get_evaluation().get_status() == EvaluationStatus.PROCESSING
 
 
 @pytest.mark.unit

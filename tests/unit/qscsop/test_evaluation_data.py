@@ -1,13 +1,16 @@
+import json
+
 import pytest
 
 from qscsop_pipeline.qscsop.entities.evaluation_data import EvaluationData
+from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 
 
 @pytest.mark.unit
 def test_default_state() -> None:
     evaluation = EvaluationData()
 
-    assert evaluation.get_status() == "PROCESSING"
+    assert evaluation.get_status() == EvaluationStatus.PROCESSING
     assert evaluation.get_is_functionally_equivalent() is None
     assert evaluation.get_iteration_count() == 0
     assert evaluation.get_detected_smells() == []
@@ -17,12 +20,12 @@ def test_default_state() -> None:
 def test_setters_update_fields() -> None:
     evaluation = EvaluationData()
 
-    evaluation.set_status("OPT_FAILED")
+    evaluation.set_status(EvaluationStatus.OPT_FAILED)
     evaluation.set_iteration_count(4)
     evaluation.set_is_functionally_equivalent(False)
     evaluation.set_detected_smells(["LongCircuit"])
 
-    assert evaluation.get_status() == "OPT_FAILED"
+    assert evaluation.get_status() == EvaluationStatus.OPT_FAILED
     assert evaluation.get_iteration_count() == 4
     assert evaluation.get_is_functionally_equivalent() is False
     assert evaluation.get_detected_smells() == ["LongCircuit"]
@@ -45,10 +48,10 @@ def test_update_result_updates_only_equivalence_and_status() -> None:
     evaluation.set_iteration_count(2)
     evaluation.set_detected_smells(["IdleQubits"])
 
-    evaluation.update_result(True, "OPTIMIZED")
+    evaluation.update_result(True, EvaluationStatus.OPTIMIZED)
 
     assert evaluation.get_is_functionally_equivalent() is True
-    assert evaluation.get_status() == "OPTIMIZED"
+    assert evaluation.get_status() == EvaluationStatus.OPTIMIZED
     assert evaluation.get_iteration_count() == 2
     assert evaluation.get_detected_smells() == ["IdleQubits"]
 
@@ -85,3 +88,16 @@ def test_set_detected_smells_copies_the_given_list() -> None:
     external_list.append("IdleQubits")
 
     assert evaluation.get_detected_smells() == ["LongCircuit"]
+
+
+@pytest.mark.unit
+def test_to_dict_serializes_status_as_plain_string() -> None:
+    evaluation = EvaluationData()
+
+    status = evaluation.to_dict()["status"]
+
+    assert status == "PROCESSING"
+
+    serialized = json.dumps(evaluation.to_dict())
+
+    assert '"status": "PROCESSING"' in serialized

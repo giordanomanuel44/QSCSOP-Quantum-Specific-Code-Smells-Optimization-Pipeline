@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
+
 
 class EvaluationData:
     """Traccia lo stato del ciclo di rilevamento/refactoring/validazione (Activity Diagram)."""
@@ -9,7 +11,7 @@ class EvaluationData:
     def __init__(self) -> None:
         self._is_functionally_equivalent: Optional[bool] = None
         self._iteration_count: int = 0
-        self._status: str = "PROCESSING"
+        self._status: EvaluationStatus = EvaluationStatus.PROCESSING
         self._detected_smells: list[str] = []
 
     def get_is_functionally_equivalent(self) -> Optional[bool]:
@@ -24,10 +26,10 @@ class EvaluationData:
     def set_iteration_count(self, value: int) -> None:
         self._iteration_count = value
 
-    def get_status(self) -> str:
+    def get_status(self) -> EvaluationStatus:
         return self._status
 
-    def set_status(self, value: str) -> None:
+    def set_status(self, value: EvaluationStatus) -> None:
         self._status = value
 
     def get_detected_smells(self) -> list[str]:
@@ -42,7 +44,7 @@ class EvaluationData:
         """Incrementa di uno il contatore di iterazioni del ciclo detect-refactor-validate."""
         self.set_iteration_count(self.get_iteration_count() + 1)
 
-    def update_result(self, is_functionally_equivalent: bool, status: str) -> None:
+    def update_result(self, is_functionally_equivalent: bool, status: EvaluationStatus) -> None:
         """Aggiorna atomicamente esito di equivalenza funzionale e stato del circuito."""
         self.set_is_functionally_equivalent(is_functionally_equivalent)
         self.set_status(status)
@@ -56,6 +58,6 @@ class EvaluationData:
         return {
             "isFunctionallyEquivalent": self._is_functionally_equivalent,
             "iterationCount": self._iteration_count,
-            "status": self._status,
+            "status": self._status.value,
             "detected_smells": self.get_detected_smells(),
         }

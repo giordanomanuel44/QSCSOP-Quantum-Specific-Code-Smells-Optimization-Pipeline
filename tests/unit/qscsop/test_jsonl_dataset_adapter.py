@@ -5,6 +5,7 @@ from types import GeneratorType
 import pytest
 
 from qscsop_pipeline.qscsop.adapters.jsonl_dataset_adapter import JsonlDatasetAdapter
+from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 
 RECORD_1 = {
     "circuitId": "bell_state",
@@ -74,7 +75,7 @@ def test_reconstructed_entities_have_no_refactored_and_are_processing(tmp_path: 
 
     for entity in adapter.stream_programs():
         assert entity.get_refactored() is None
-        assert entity.get_evaluation().get_status() == "PROCESSING"
+        assert entity.get_evaluation().get_status() == EvaluationStatus.PROCESSING
 
 
 @pytest.mark.unit
