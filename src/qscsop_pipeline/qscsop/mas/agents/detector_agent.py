@@ -19,15 +19,23 @@ class _SmellDetectionSchema(BaseModel):
     # L'ordine dei campi conta: in generazione autoregressiva ogni campo e' condizionato solo su
     # quelli che lo precedono, quindi l'ordine qui sotto e' l'ordine di ragionamento imposto al
     # modello, non solo la forma dello schema.
-    # 1. qubit_operation_analysis e' PRIMO cosi' il modello genera il ragionamento per-qubit
-    #    (chain-of-thought) prima di impegnarsi su qualunque verdetto. Campo interno: non viene
-    #    mai propagato in SmellReportDTO.
+    # 1. line_by_line_expansion e' PRIMO: trascrizione MECCANICA (non un'analisi) di ogni riga di
+    #    codice in operazioni elementari "gate -> qubit_index", con le chiamate register-wide
+    #    espanse esplicitamente in una entry per qubit. Cambia il compito cognitivo richiesto al
+    #    modello da "inferisci quali qubit tocca questa riga" (fallito due volte, vedi
+    #    docs/report_qscsop_refactoring_equivalence.md) a "riscrivi meccanicamente cosa fa ogni
+    #    riga" -- lo scaffolding sta nella trascrizione stessa, non in una regola astratta. Campo
+    #    interno: non viene mai propagato in SmellReportDTO.
+    line_by_line_expansion: str
+    # 2. qubit_operation_analysis e' SECONDO cosi' il modello raggruppa per qubit SOLO a partire
+    #    dalla trascrizione appena prodotta (non tornando al codice originale), prima di impegnarsi
+    #    su qualunque verdetto. Campo interno: non viene mai propagato in SmellReportDTO.
     qubit_operation_analysis: str
-    # 2. report_details e' SECONDO: il modello articola qui la conclusione discorsiva (quale smell,
+    # 3. report_details e' TERZO: il modello articola qui la conclusione discorsiva (quale smell,
     #    se presente, e perche') basandosi sull'analisi appena scritta, prima di dover scegliere i
     #    valori formali della lista.
     report_details: str
-    # 3. detected_smell_types e' ULTIMO: deve limitarsi a formalizzare in valori vincolati di
+    # 4. detected_smell_types e' ULTIMO: deve limitarsi a formalizzare in valori vincolati di
     #    QuantumSmellType la conclusione gia' articolata in report_details (lista vuota se nessuno
     #    smell), non essere un giudizio indipendente. has_smells non e' chiesto separatamente, ma
     #    DERIVATO da questa lista in detect_smell.
@@ -141,6 +149,25 @@ one) is NOT idle, regardless of whether the circuit ever measures it -- the abse
 measurement is a property of the whole circuit, not evidence that a specific qubit is unused. \
 Only flag a qubit as idle if it receives literally zero gates.
 
+DISTINGUISHING LONG CIRCUIT FROM IDLE QUBITS WHEN GATES CANCEL:
+A cancellation of gates (like two H gates in a row) is not itself a smell label -- it is a fact \
+you must interpret. Ask what the cancellation RESULTS IN for that qubit:
+- If the redundant/cancelling gates leave the qubit STILL PARTICIPATING in the computation (it \
+is entangled with others, or its final state still carries information that affects the \
+outcome), and the redundancy is merely wasteful length that could be simplified to a shorter \
+equivalent sequence -- this is LONG CIRCUIT. The qubit stays useful; only the gate sequence is \
+unnecessarily long.
+- If the cancelling gates leave the qubit INERT -- returned to a fixed state (e.g. |0>) with no \
+superposition and no entanglement, so that its measurement outcome is deterministic and \
+contributes nothing to the computation -- this is IDLE QUBITS. The cancellation is not just \
+wasteful length; it is the REASON the qubit ends up doing nothing.
+Key question: after the cancellation, does the qubit still do useful work (Long Circuit) or is \
+it left contributing nothing (Idle Qubits)? A qubit whose gates cancel to the identity and is \
+then only followed by phase gates before a Z-basis measurement ends up deterministic and \
+non-contributing -- Idle Qubits.
+Note: the same circuit can in principle exhibit both smells on different qubits. Judge each \
+qubit on its own resulting role.
+
 EXAMPLES OF CIRCUITS WITH A SMELL (detected_smell_types is non-empty)
 
 Example A -- LONG CIRCUIT:
@@ -201,15 +228,36 @@ CIRCUIT TO ANALYZE
 ```python
 {code}```
 
-REASONING PROCEDURE (fill qubit_operation_analysis FIRST, before deciding)
+REASONING PROCEDURE (fill line_by_line_expansion FIRST, then qubit_operation_analysis, before \
+deciding)
 
-Before giving any verdict, in the qubit_operation_analysis field list EVERY qubit of the circuit \
-one by one (by index), and for each one explicitly write ALL the operations that involve it \
-(gates and measurements), reading the ENTIRE code carefully from start to end, including the \
-final lines and those separated by blank lines or barriers. A qubit may be declared Idle ONLY \
-if, after this explicit listing, it turns out to have zero meaningful operations. Do not infer \
-that a qubit is unused without having first listed its operations: if you find even a single \
-gate or measurement involving it, it is NOT an idle qubit.
+STEP 1 -- LINE-BY-LINE EXPANSION (fill line_by_line_expansion first): Go through the circuit \
+code ONE LINE AT A TIME, in order. For each line that applies a gate, write one explicit entry \
+of the form 'gate_name -> qubit_index'. CRITICAL RULE for register-wide calls: if a line applies \
+a gate to a whole register without an index (e.g. qc.h(qreg_q)), you MUST write ONE separate \
+entry for EACH qubit index in that register. Example transcription:
+  Code line 'qc.h(qreg_q)' with a 3-qubit register expands to:
+    h -> 0
+    h -> 1
+    h -> 2
+  Code line 'qc.h(qreg_q[2])' expands to:
+    h -> 2
+Do NOT skip, merge, or summarize lines. Transcribe every gate line literally and completely, \
+expanding every register-wide call into one entry per qubit. This expansion is a mechanical \
+transcription task, not an analysis -- just faithfully rewrite what each line does.
+
+STEP 2 -- PER-QUBIT GROUPING (fill qubit_operation_analysis): Using ONLY the expansion you just \
+produced in STEP 1 (not the original code), group the entries by qubit index and list, for each \
+qubit, its full ordered sequence of gates. Count how many times each gate appears per qubit -- \
+if a qubit shows the same gate twice in a row (e.g. two h entries), note that they may cancel. \
+If they cancel, DO NOT automatically label it Long Circuit: determine what the qubit does AFTER \
+the cancellation. If the qubit is left inert (back to |0>, only phase gates before a Z-basis \
+measurement, no entanglement, deterministic outcome), classify it as IDLE QUBITS, not Long \
+Circuit -- use the disambiguation rule in the smell definitions above. Then apply the Idle \
+Qubits / Long Circuit criteria as defined above. A qubit may be declared Idle ONLY if, after this \
+explicit grouping, it turns out to have zero meaningful operations. Do not infer that a qubit is \
+unused without having first listed its operations: if you find even a single gate or measurement \
+involving it, it is NOT an idle qubit.
 
 Only after completing qubit_operation_analysis, write report_details: a concise technical \
 explanation of which smell(s) you found and where, or, if the circuit is clean, why it is clean. \
@@ -222,11 +270,14 @@ formalization of the verdict you just articulated, not an independent judgment. 
 with the required structured object, with no extra text outside the requested format."""
 
 _EXPECTED_OUTPUT = (
-    "A structured object with three fields, in this order: qubit_operation_analysis "
-    "(step-by-step listing of every qubit and the operations involving it), report_details "
-    "(string describing the detected smell(s) or why the circuit is clean), and "
-    "detected_smell_types (a list containing zero, one, or both of the allowed values "
-    '"long_circuit" and "idle_qubits", exactly matching the conclusion in report_details).'
+    "A structured object with four fields, in this order: line_by_line_expansion (mechanical "
+    "transcription of every gate line into 'gate_name -> qubit_index' entries, with "
+    "register-wide calls expanded into one entry per qubit), qubit_operation_analysis "
+    "(step-by-step listing of every qubit and the operations involving it, grouped from the "
+    "expansion above), report_details (string describing the detected smell(s) or why the "
+    "circuit is clean), and detected_smell_types (a list containing zero, one, or both of the "
+    'allowed values "long_circuit" and "idle_qubits", exactly matching the conclusion in '
+    "report_details)."
 )
 
 

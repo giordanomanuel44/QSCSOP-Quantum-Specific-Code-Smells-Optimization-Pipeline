@@ -34,6 +34,7 @@ def test_detect_smell_maps_positive_detection(mocker) -> None:
         agent,
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
+            line_by_line_expansion="h -> 0\nz -> 0\nh -> 0",
             qubit_operation_analysis="q0: h, z, h",
             detected_smell_types=[QuantumSmellType.LONG_CIRCUIT],
             report_details="H-Z-H equivale a X: Long Circuit.",
@@ -55,6 +56,7 @@ def test_detect_smell_maps_negative_detection(mocker) -> None:
         agent,
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
+            line_by_line_expansion="h -> 0\nz -> 0\nh -> 0",
             qubit_operation_analysis="q0: h, z, h",
             detected_smell_types=[],
             report_details="",
@@ -78,6 +80,7 @@ def test_detect_smell_maps_both_smell_types(mocker) -> None:
         agent,
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
+            line_by_line_expansion="h -> 0\nh -> 1\nh -> 2",
             qubit_operation_analysis="q0..q2 analizzati",
             detected_smell_types=[
                 QuantumSmellType.LONG_CIRCUIT,
@@ -115,6 +118,7 @@ def test_detect_smell_invokes_crew_once_with_code(mocker) -> None:
         agent,
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
+            line_by_line_expansion="h -> 0\nz -> 0\nh -> 0",
             qubit_operation_analysis="q0: h, z, h",
             detected_smell_types=[],
             report_details="",
@@ -141,6 +145,7 @@ def test_task_prompt_includes_negative_lc_fixed_example(mocker) -> None:
         def kickoff(self):
             return SimpleNamespace(
                 pydantic=_SmellDetectionSchema(
+                    line_by_line_expansion="h -> 0\nz -> 0\nh -> 0",
                     qubit_operation_analysis="q0: h, z, h",
                     detected_smell_types=[],
                     report_details="",
@@ -167,6 +172,7 @@ def test_reasoning_field_stays_internal_and_is_not_exposed_in_dto(mocker) -> Non
         agent,
         "_run_detection_crew",
         return_value=_SmellDetectionSchema(
+            line_by_line_expansion="h -> 0\np -> 0\nz -> 0\ns -> 0\nmeasure -> 0",
             qubit_operation_analysis=reasoning,
             detected_smell_types=[],
             report_details="Circuito pulito.",
