@@ -36,7 +36,8 @@ _TAG = "[Refactor/Review loop E2E]"
 @pytest.mark.e2e
 def test_review_feedback_guides_a_second_refactoring_attempt() -> None:
     # DetectorAgent su un modello piu' grande (DETECTOR_MODEL), RefactorerAgent/ReviewerAgent sul
-    # modello piu' piccolo e veloce (DEFAULT_AGENT_MODEL): vedi _llm_config.py per la diagnosi.
+    # modello piu' piccolo e veloce (DEFAULT_AGENT_MODEL): vedi qscsop.mas.llm_config per la
+    # diagnosi.
     detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     facade = QiskitFacade()

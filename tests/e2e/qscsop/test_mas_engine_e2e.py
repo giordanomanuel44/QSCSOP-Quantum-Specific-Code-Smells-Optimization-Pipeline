@@ -6,7 +6,7 @@ RefactorerAgent, ValidationService, ReviewerAgent). Caso di studio: idq-smelly.p
 noto (Idle Qubits) gia' usato nel test del ciclo iterativo.
 
 Il DetectorAgent usa un modello diverso (piu' grande) da RefactorerAgent/ReviewerAgent: vedi
-_llm_config.py per la diagnosi che ha motivato la scelta.
+qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato la scelta.
 
 NATURA DEL TEST: diagnostico, non pass/fail sull'esito del ciclo. La convergenza entro
 max_iterations=3 non e' garantita; l'informazione utile sta nell'output stampato (da leggere con
@@ -70,8 +70,9 @@ def _build_baseline_entity(facade: QiskitFacade) -> QuantumProgramEntity:
 @pytest.mark.e2e
 def test_mas_engine_processes_idle_qubits_circuit_end_to_end() -> None:
     # DetectorAgent su un modello piu' grande (DETECTOR_MODEL): richiede piu' rigore analitico,
-    # vedi _llm_config.py per la diagnosi che ha motivato la scelta. RefactorerAgent e
-    # ReviewerAgent restano sul modello piu' piccolo e veloce (DEFAULT_AGENT_MODEL).
+    # vedi qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato la scelta.
+    # RefactorerAgent e ReviewerAgent restano sul modello piu' piccolo e veloce
+    # (DEFAULT_AGENT_MODEL).
     detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     facade = QiskitFacade()

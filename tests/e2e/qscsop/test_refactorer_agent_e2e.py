@@ -24,7 +24,8 @@ _IDQ_SMELLY_PATH = _DATA_DIR / "idq" / "idq-smelly.py"
 @pytest.mark.e2e
 def test_refactorer_agent_fixes_long_circuit_preserving_equivalence() -> None:
     # DetectorAgent su DETECTOR_MODEL, RefactorerAgent su DEFAULT_AGENT_MODEL: vedi
-    # _llm_config.py per la diagnosi che ha motivato modelli diversi per-agente.
+    # qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato modelli diversi
+    # per-agente.
     detector = DetectorAgent(llm=LLM(model=DETECTOR_MODEL, temperature=0))
     refactorer = RefactorerAgent(llm=LLM(model=DEFAULT_AGENT_MODEL, temperature=0))
     facade = QiskitFacade()
@@ -55,7 +56,8 @@ def test_refactorer_agent_fixes_long_circuit_preserving_equivalence() -> None:
 )
 def test_refactorer_agent_fixes_idle_qubits_preserving_equivalence() -> None:
     # DetectorAgent su DETECTOR_MODEL, RefactorerAgent su DEFAULT_AGENT_MODEL: vedi
-    # _llm_config.py per la diagnosi che ha motivato modelli diversi per-agente.
+    # qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato modelli diversi
+    # per-agente.
     detector = DetectorAgent(llm=LLM(model=DETECTOR_MODEL, temperature=0))
     refactorer = RefactorerAgent(llm=LLM(model=DEFAULT_AGENT_MODEL, temperature=0))
     facade = QiskitFacade()

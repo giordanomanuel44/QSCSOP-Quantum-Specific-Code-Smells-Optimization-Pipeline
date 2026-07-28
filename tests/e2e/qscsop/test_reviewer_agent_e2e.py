@@ -19,6 +19,7 @@ from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import RefactorerAgent
 from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import ReviewerAgent
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
 from qscsop_pipeline.qscsop.mas.dto.validation_result_dto import ValidationResultDTO
+from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL, DETECTOR_MODEL
 from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
 
 # tests/e2e/qscsop/ -> risali a root repo, poi al file smelly usato come baseline reale.
@@ -28,10 +29,14 @@ _IDQ_SMELLY_PATH = _DATA_DIR / "idq" / "idq-smelly.py"
 
 @pytest.mark.e2e
 def test_reviewer_agent_contextualizes_a_real_validation_failure() -> None:
-    llm = LLM(model="ollama/qwen2.5-coder:7b", temperature=0)
-    detector = DetectorAgent(llm=llm)
-    refactorer = RefactorerAgent(llm=llm)
-    reviewer = ReviewerAgent(llm=llm)
+    # DetectorAgent su DETECTOR_MODEL, RefactorerAgent/ReviewerAgent su DEFAULT_AGENT_MODEL:
+    # vedi qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato modelli diversi
+    # per-agente.
+    detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
+    agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
+    detector = DetectorAgent(llm=detector_llm)
+    refactorer = RefactorerAgent(llm=agent_llm)
+    reviewer = ReviewerAgent(llm=agent_llm)
     facade = QiskitFacade()
     validation_service = ValidationService(facade=facade)
 
@@ -72,7 +77,7 @@ _SYNTAX_ERROR_DETAILS = (
 
 @pytest.mark.e2e
 def test_reviewer_agent_contextualizes_a_compilation_failure() -> None:
-    llm = LLM(model="ollama/qwen2.5-coder:7b", temperature=0)
+    llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     reviewer = ReviewerAgent(llm=llm)
 
     smell_report = SmellReportDTO(
