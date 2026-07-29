@@ -18,6 +18,7 @@ _FEEDBACK = (
     "Il tentativo precedente ha rimosso il qubit inerte ma ha anche cancellato gate legittimi "
     "sugli altri qubit: rimuovi solo il qubit idle e lascia intatto il resto."
 )
+_FAILED_CODE = "qc = QuantumCircuit(2)\nqc.h(0)\nqc.cx(0, 1)\n"
 
 
 def _make_agent() -> ReviewerAgent:
@@ -49,6 +50,38 @@ def _metrics_not_improved_failure() -> ValidationResultDTO:
     )
 
 
+def _metrics_no_improvement_at_all_failure() -> ValidationResultDTO:
+    """CASE 1: ogni valore del refactored e' identico alla baseline, nessuna dimensione migliora."""
+    return ValidationResultDTO(
+        is_valid=False,
+        raw_error_data=(
+            "Il refactoring non ha migliorato le metriche fisiche rispetto alla baseline. "
+            "Baseline: gateCount=10, depth=8, qubit=3. Refactored: gateCount=10, depth=8, qubit=3."
+        ),
+        new_metrics={
+            "logicalQubits": 3,
+            "abstractMetrics": {"gateCount": 5, "depth": 4},
+            "physicalMetrics": {"gateCount": 10, "depth": 8},
+        },
+    )
+
+
+def _metrics_near_miss_failure() -> ValidationResultDTO:
+    """CASE 2: gateCount e qubit migliorano, ma depth peggiora rispetto alla baseline."""
+    return ValidationResultDTO(
+        is_valid=False,
+        raw_error_data=(
+            "Il refactoring non ha migliorato le metriche fisiche rispetto alla baseline. "
+            "Baseline: gateCount=31, depth=14, qubit=5. Refactored: gateCount=28, depth=15, qubit=3."
+        ),
+        new_metrics={
+            "logicalQubits": 3,
+            "abstractMetrics": {"gateCount": 16, "depth": 10},
+            "physicalMetrics": {"gateCount": 28, "depth": 15},
+        },
+    )
+
+
 @pytest.mark.unit
 def test_review_returns_contextualized_feedback(mocker) -> None:
     agent = _make_agent()
@@ -58,7 +91,7 @@ def test_review_returns_contextualized_feedback(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=_FEEDBACK),
     )
 
-    result = agent.review(_equivalence_failure(), _smell_report())
+    result = agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
 
     assert result == _FEEDBACK
 
@@ -73,7 +106,7 @@ def test_review_propagates_parsing_failure(mocker) -> None:
     )
 
     with pytest.raises(RuntimeError, match="output non conforme allo schema"):
-        agent.review(_equivalence_failure(), _smell_report())
+        agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
 
 
 @pytest.mark.unit
@@ -87,9 +120,9 @@ def test_review_invokes_crew_once_with_all_arguments(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=_FEEDBACK),
     )
 
-    agent.review(validation_result, report)
+    agent.review(validation_result, report, _FAILED_CODE)
 
-    run_mock.assert_called_once_with(validation_result, report)
+    run_mock.assert_called_once_with(validation_result, report, _FAILED_CODE)
 
 
 @pytest.mark.unit
@@ -115,7 +148,7 @@ def test_review_returns_long_feedback_without_truncation(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=long_feedback),
     )
 
-    result = agent.review(_equivalence_failure(), _smell_report())
+    result = agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
 
     assert result == long_feedback
 
@@ -131,7 +164,7 @@ def test_review_returns_empty_feedback_verbatim(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=""),
     )
 
-    result = agent.review(_equivalence_failure(), _smell_report())
+    result = agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
 
     assert result == ""
 
@@ -160,11 +193,11 @@ def test_task_prompt_includes_equivalence_hint_only_on_equivalence_errors(mocker
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_equivalence_failure(), _smell_report())
+    agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
     assert "ADDITIONAL HINT FOR THIS SPECIFIC FAILURE" in captured["task"].description
     assert "FUNCTIONAL EQUIVALENCE" in captured["task"].description
 
-    agent.review(_equivalence_failure("SyntaxError: invalid syntax"), _smell_report())
+    agent.review(_equivalence_failure("SyntaxError: invalid syntax"), _smell_report(), _FAILED_CODE)
     assert "ADDITIONAL HINT FOR THIS SPECIFIC FAILURE" not in captured["task"].description
 
 
@@ -176,11 +209,25 @@ def test_task_prompt_carries_raw_error_and_original_smell(mocker) -> None:
     report = _smell_report()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_equivalence_failure(), report)
+    agent.review(_equivalence_failure(), report, _FAILED_CODE)
 
     description = captured["task"].description
     assert _RAW_ERROR in description
     assert report.get_report_details() in description
+
+
+@pytest.mark.unit
+def test_task_prompt_includes_failed_code(mocker) -> None:
+    # Il codice del tentativo appena fallito deve arrivare nel prompt, cosi' il feedback puo'
+    # riferirsi concretamente a cosa il tentativo ha fatto invece di restare astratto.
+    agent = _make_agent()
+    captured = _capture_task(mocker, agent)
+
+    agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
+
+    description = captured["task"].description
+    assert "THE CODE THAT WAS ATTEMPTED" in description
+    assert _FAILED_CODE in description
 
 
 @pytest.mark.unit
@@ -192,11 +239,40 @@ def test_task_prompt_includes_metrics_not_improved_hint_when_new_metrics_is_popu
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_metrics_not_improved_failure(), _smell_report())
+    agent.review(_metrics_not_improved_failure(), _smell_report(), _FAILED_CODE)
 
     description = captured["task"].description
-    assert "did not actually improve anything measurable" in description
+    assert "did not satisfy the improvement criterion" in description
     assert "FUNCTIONAL EQUIVALENCE" not in description
+
+
+@pytest.mark.unit
+def test_task_prompt_metrics_hint_covers_case_1_no_improvement_at_all(mocker) -> None:
+    # raw_error_data riflette nessuna metrica migliorata: il ramo CASE 1 dell'istruzione deve
+    # essere presente nel prompt (il modello lo sceglie da solo leggendo i numeri, non e' materia
+    # di questo test unitario -- vedi test e2e per quello).
+    agent = _make_agent()
+    captured = _capture_task(mocker, agent)
+
+    agent.review(_metrics_no_improvement_at_all_failure(), _smell_report(), _FAILED_CODE)
+
+    description = captured["task"].description
+    assert "CASE 1" in description
+
+
+@pytest.mark.unit
+def test_task_prompt_metrics_hint_covers_case_2_near_miss(mocker) -> None:
+    # raw_error_data riflette un "near miss" (una metrica peggiorata, altre migliorate): il blocco
+    # hint completo (che include entrambi i rami, CASE 1 e CASE 2) deve comunque arrivare nel
+    # prompt -- non si testa quale ramo il modello sceglie di applicare.
+    agent = _make_agent()
+    captured = _capture_task(mocker, agent)
+
+    agent.review(_metrics_near_miss_failure(), _smell_report(), _FAILED_CODE)
+
+    description = captured["task"].description
+    assert "ADDITIONAL HINT FOR THIS SPECIFIC FAILURE" in description
+    assert "CASE 2" in description
 
 
 @pytest.mark.unit
@@ -208,11 +284,11 @@ def test_task_prompt_includes_equivalence_hint_when_new_metrics_is_none_and_erro
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_equivalence_failure(), _smell_report())
+    agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
 
     description = captured["task"].description
     assert "FUNCTIONAL EQUIVALENCE" in description
-    assert "did not actually improve anything measurable" not in description
+    assert "did not satisfy the improvement criterion" not in description
 
 
 @pytest.mark.unit
@@ -225,8 +301,8 @@ def test_task_prompt_injects_no_special_hint_on_compilation_failure(mocker) -> N
     compilation_failure = _equivalence_failure(
         'Traceback (most recent call last):\n  File "<string>", line 3\nSyntaxError: invalid syntax'
     )
-    agent.review(compilation_failure, _smell_report())
+    agent.review(compilation_failure, _smell_report(), _FAILED_CODE)
 
     description = captured["task"].description
     assert "FUNCTIONAL EQUIVALENCE" not in description
-    assert "did not actually improve anything measurable" not in description
+    assert "did not satisfy the improvement criterion" not in description

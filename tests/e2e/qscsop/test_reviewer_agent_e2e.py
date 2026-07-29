@@ -56,7 +56,7 @@ def test_reviewer_agent_contextualizes_a_real_validation_failure() -> None:
         )
         return
 
-    feedback = reviewer.review(validation_result, smell_report)
+    feedback = reviewer.review(validation_result, smell_report, refactored_code)
 
     print("[ReviewerAgent E2E] feedback:\n" + feedback)
 
@@ -74,6 +74,11 @@ _SYNTAX_ERROR_DETAILS = (
     "         ^\nSyntaxError: '(' was never closed"
 )
 
+# Codice fittizio coerente con _SYNTAX_ERROR_DETAILS (la riga con la parentesi non chiusa), usato
+# come failed_code: qui non c'e' un vero tentativo del RefactorerAgent (vedi sotto), serve solo un
+# valore deterministico per il terzo argomento di review().
+_SYNTAX_ERROR_CODE = "from qiskit import QuantumCircuit\n\nqc = QuantumCircuit(3)\nqc.h(0\n"
+
 
 @pytest.mark.e2e
 def test_reviewer_agent_contextualizes_a_compilation_failure() -> None:
@@ -90,7 +95,7 @@ def test_reviewer_agent_contextualizes_a_compilation_failure() -> None:
         is_valid=False, raw_error_data=_SYNTAX_ERROR_DETAILS, new_metrics=None
     )
 
-    feedback = reviewer.review(validation_result, smell_report)
+    feedback = reviewer.review(validation_result, smell_report, _SYNTAX_ERROR_CODE)
 
     print("\n[ReviewerAgent E2E syntax] raw_error_details:\n" + _SYNTAX_ERROR_DETAILS)
     print("[ReviewerAgent E2E syntax] feedback:\n" + feedback)

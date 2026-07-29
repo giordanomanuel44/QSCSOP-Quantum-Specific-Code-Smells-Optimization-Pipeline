@@ -1,8 +1,12 @@
 """Orchestratore radice del modulo QSCSOP: coordina lettura, elaborazione MAS e persistenza."""
 
+import logging
+
 from qscsop_pipeline.qscsop.interfaces.i_data_sink import IDataSink
 from qscsop_pipeline.qscsop.interfaces.i_dataset_adapter import IDatasetAdapter
 from qscsop_pipeline.qscsop.mas.interfaces.i_mas_engine import IMASEngine
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineCoordinator:
@@ -30,6 +34,20 @@ class PipelineCoordinator:
         sempre un'entita' con stato terminale, mai un'eccezione (sezione 1.4.4) -- aggiungere
         gestione qui sarebbe ridondante e rischierebbe di mascherare un problema reale.
         """
-        for entity in self._dataset_adapter.stream_programs():
+        for index, entity in enumerate(self._dataset_adapter.stream_programs(), start=1):
+            logger.info(
+                "[%s] Elaborazione circuito %s (%s)...",
+                index,
+                entity.get_circuit_id(),
+                entity.get_dataset_source(),
+            )
             result = self._mas_engine.process_entity(entity)
+            evaluation = result.get_evaluation()
+            logger.info(
+                "[%s] Circuito %s completato: stato=%s, iterazioni=%s",
+                index,
+                result.get_circuit_id(),
+                evaluation.get_status(),
+                evaluation.get_iteration_count(),
+            )
             self._data_sink.save_program(result)

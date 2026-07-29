@@ -71,7 +71,7 @@ def test_review_feedback_guides_a_second_refactoring_attempt() -> None:
         return
 
     # --- REVIEW: l'intero ValidationResultDTO diventa feedback azionabile. ---
-    feedback = reviewer.review(validation_1, smell_report)
+    feedback = reviewer.review(validation_1, smell_report, attempt_1)
     print(f"\n{_TAG} --- FEEDBACK DEL REVIEWER ---")
     print(feedback)
 

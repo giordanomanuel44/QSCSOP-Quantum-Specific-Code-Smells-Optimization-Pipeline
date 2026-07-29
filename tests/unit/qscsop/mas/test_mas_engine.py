@@ -119,7 +119,9 @@ def test_process_entity_fails_once_then_succeeds() -> None:
     second_call_args = collaborators["refactorer_agent"].refactor.call_args_list[1].args
     assert first_call_args[2] == ""
     assert second_call_args[2] == "correggi l'equivalenza"
-    collaborators["reviewer_agent"].review.assert_called_once_with(invalid_result, smell_report)
+    collaborators["reviewer_agent"].review.assert_called_once_with(
+        invalid_result, smell_report, "attempt_1"
+    )
 
 
 @pytest.mark.unit

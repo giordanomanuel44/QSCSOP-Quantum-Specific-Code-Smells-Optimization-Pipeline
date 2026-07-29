@@ -58,14 +58,23 @@ original circuit exactly as it was.
 _METRICS_NOT_IMPROVED_HINT_SECTION = """
 ADDITIONAL HINT FOR THIS SPECIFIC FAILURE
 
-This error means the circuit compiled correctly and remained functionally equivalent, but the \
-refactoring attempt did not actually improve anything measurable: the physical gate count, \
-physical depth, and logical qubit count are all unchanged (or worse) compared to the baseline. A \
-common cause is an overly cautious attempt that left the circuit essentially untouched out of \
-fear of breaking equivalence. Explicitly tell the next attempt that it MUST make a real, \
-measurable change that removes or simplifies the reported anomaly -- merely preserving the \
-original circuit is not a valid correction, even if it trivially satisfies compilation and \
-equivalence checks.
+This error means the circuit compiled and remained functionally equivalent, but did not satisfy \
+the improvement criterion: EVERY metric (physical gate count, physical depth, logical qubit \
+count) must be less than or equal to the baseline, AND at least one must be strictly less. The \
+raw failure details above include the exact baseline and refactored values for all three \
+metrics -- read them carefully and determine which specific situation applies:
+
+CASE 1 -- NO metric improved at all (all three equal, or worse, than baseline): the attempt was \
+too conservative and left the circuit essentially unchanged. Tell the next attempt it MUST make \
+a real, measurable structural change that removes or simplifies the reported anomaly.
+
+CASE 2 -- SOME metric(s) improved but at least one got WORSE than the baseline (a 'near miss'): \
+the previous attempt (shown above) was substantially rewritten in the right direction, but \
+regressed on one specific dimension. Identify EXACTLY which metric got worse by comparing the \
+numbers in the raw failure details. Tell the next attempt to KEEP the overall structure and \
+approach of the previous attempt (it was mostly correct), and fix SPECIFICALLY the regressed \
+dimension -- do not discard the previous attempt's approach and start over from the original \
+circuit.
 """
 
 _TASK_DESCRIPTION_TEMPLATE = """A refactoring attempt on a Qiskit quantum circuit has just FAILED \
@@ -85,6 +94,12 @@ RAW FAILURE DETAILS (verbatim, from the deterministic validation step)
 
 This raw text may be a Python traceback, a short diagnostic message, or any other technical \
 output: interpret whatever form it takes, and do not assume a fixed format.
+
+THE CODE THAT WAS ATTEMPTED (and failed)
+{failed_code}
+
+This is the exact code the previous refactoring attempt produced. Refer to it explicitly in your \
+feedback when relevant -- do not describe the failure only in the abstract.
 {hint_section}
 YOUR TASK
 
@@ -130,14 +145,20 @@ class ReviewerAgent(IReviewerAgent):
         )
 
     def review(
-        self, validation_result: ValidationResultDTO, original_smell: SmellReportDTO
+        self,
+        validation_result: ValidationResultDTO,
+        original_smell: SmellReportDTO,
+        failed_code: str,
     ) -> str:
         """Contestualizza l'esito di validazione rispetto allo smell originale; ritorna il feedback."""
-        result = self._run_review_crew(validation_result, original_smell)
+        result = self._run_review_crew(validation_result, original_smell, failed_code)
         return result.contextualized_feedback
 
     def _run_review_crew(
-        self, validation_result: ValidationResultDTO, original_smell: SmellReportDTO
+        self,
+        validation_result: ValidationResultDTO,
+        original_smell: SmellReportDTO,
+        failed_code: str,
     ) -> _ReviewSchema:
         """Esegue il Crew di review e ritorna l'output strutturato; isola la chiamata all'LLM.
 
@@ -166,6 +187,7 @@ class ReviewerAgent(IReviewerAgent):
             description=_TASK_DESCRIPTION_TEMPLATE.format(
                 report_details=original_smell.get_report_details(),
                 raw_error_details=raw_error_details,
+                failed_code=failed_code,
                 hint_section=hint_section,
             ),
             expected_output=_EXPECTED_OUTPUT,

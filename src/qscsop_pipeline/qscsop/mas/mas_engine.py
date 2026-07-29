@@ -73,7 +73,7 @@ class MASEngine(IMASEngine):
 
                 if entity.get_evaluation().get_iteration_count() < self._max_iterations:
                     review_feedback = self._reviewer_agent.review(
-                        validation_result, smell_report
+                        validation_result, smell_report, refactored_code
                     )
                     continue
 

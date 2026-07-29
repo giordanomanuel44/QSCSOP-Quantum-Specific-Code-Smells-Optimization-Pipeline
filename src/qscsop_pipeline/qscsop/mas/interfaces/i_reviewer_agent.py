@@ -11,13 +11,19 @@ class IReviewerAgent(ABC):
 
     @abstractmethod
     def review(
-        self, validation_result: ValidationResultDTO, original_smell: SmellReportDTO
+        self,
+        validation_result: ValidationResultDTO,
+        original_smell: SmellReportDTO,
+        failed_code: str,
     ) -> str:
         """Contestualizza validation_result rispetto a original_smell; ritorna il feedback.
 
         L'input e' l'intero ValidationResultDTO prodotto dal ValidationService (sezione "Gli
-        Agenti e le loro Responsabilita'" della tesi), non solo il suo raw_error_data. L'output
-        resta testo libero (non un DTO, coerente con il class diagram): va iniettato direttamente
-        come review_feedback nel tentativo successivo del RefactorerAgent.
+        Agenti e le loro Responsabilita'" della tesi), non solo il suo raw_error_data. failed_code
+        e' il codice esatto prodotto dal tentativo di refactoring appena fallito (non il
+        baseline): permette al feedback di riferirsi concretamente a cosa il tentativo ha fatto,
+        invece di descrivere l'errore solo in astratto. L'output resta testo libero (non un DTO,
+        coerente con il class diagram): va iniettato direttamente come review_feedback nel
+        tentativo successivo del RefactorerAgent.
         """
         raise NotImplementedError
