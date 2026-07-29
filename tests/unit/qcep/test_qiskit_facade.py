@@ -314,6 +314,82 @@ qc.cx(0, 1)
 
 
 @pytest.mark.unit
+def test_check_equivalence_on_same_dimension_rejects_a_control_only_false_positive(
+    facade: QiskitFacade,
+) -> None:
+    # Falso positivo reale che la vecchia logica (Statevector da |00>, quindi solo il
+    # comportamento a partire dall'input di default) avrebbe accettato erroneamente: da |00> un
+    # CX con controllo 0 non scatta mai, quindi entrambi i circuiti restano fermi su |00> e
+    # sarebbero risultati "equivalenti". Operator confronta l'intera trasformazione (valida per
+    # QUALUNQUE input, incluso |10>, dove i due circuiti si comportano in modo diverso): il
+    # confronto deve ora correttamente ritornare False.
+    cx_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.cx(0, 1)
+"""
+    empty_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+"""
+
+    assert facade.check_equivalence(cx_source, empty_source) is False
+
+
+@pytest.mark.unit
+def test_check_equivalence_across_dimensions_rejects_control_only_gates_inert_from_zero(
+    facade: QiskitFacade,
+) -> None:
+    # Riproduzione ridotta del bug reale osservato in produzione: baseline a 5 qubit con tre ccx
+    # concatenati (tutti inerti da |00000>) validato come equivalente a un refactored a 3 qubit
+    # con un solo ccx (anch'esso inerte da |000>) — entrambi "non fanno nulla" dall'origine, quindi
+    # il vecchio confronto (solo |0...0>) li dichiarava a torto equivalenti. Qui in forma ridotta
+    # (4 vs 3 qubit invece di 5 vs 3): un ccx richiede sempre 3 qubit distinti, quindi la coppia
+    # letterale "3 vs 2 qubit" non e' costruibile con gate ccx — 4 vs 3 e' la riduzione minima che
+    # preserva la stessa struttura del caso reale (due ccx concatenati vs un solo ccx, entrambi
+    # inerti da zero).
+    baseline_double_ccx_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(4)
+qc.ccx(0, 1, 2)
+qc.ccx(0, 1, 3)
+"""
+    refactored_single_ccx_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(3)
+qc.ccx(1, 2, 0)
+"""
+
+    # Da |0000>/|000> entrambi restano inerti (i controlli sono 0): il vecchio confronto (solo
+    # |0...0>) li avrebbe dichiarati equivalenti. Da |1111>/|111> i ccx scattano davvero,
+    # producendo pattern di bit finali strutturalmente incompatibili per qualunque scelta di
+    # qubit tracciato via: il confronto ora deve ritornare False.
+    assert facade.check_equivalence(baseline_double_ccx_source, refactored_single_ccx_source) is False
+
+
+@pytest.mark.unit
+def test_check_equivalence_rejects_circuits_above_the_operator_limit_at_same_dimension(
+    facade: QiskitFacade,
+) -> None:
+    # Stesso tipo di guardia gia' verificata per il ramo partial_trace (dimensioni diverse), ora
+    # applicata al ramo Operator (stessa dimensione): il limite deve scattare PRIMA di costruire
+    # qualunque Operator (2^13 x 2^13 sarebbe enorme), quindi il test resta istantaneo.
+    oversized_same_dimension_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(13)
+qc.h(0)
+"""
+
+    with pytest.raises(ValueError, match="13 qubit, limite 12"):
+        facade.check_equivalence(oversized_same_dimension_source, oversized_same_dimension_source)
+
+
+@pytest.mark.unit
 def test_check_equivalence_rejects_circuits_above_the_partial_trace_limit(
     facade: QiskitFacade,
 ) -> None:

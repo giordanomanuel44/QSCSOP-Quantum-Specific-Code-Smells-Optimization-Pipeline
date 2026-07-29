@@ -10,7 +10,7 @@ from typing import Optional
 from qiskit import QuantumCircuit, transpile
 from qiskit.circuit import ControlFlowOp
 from qiskit.providers.fake_provider import GenericBackendV2
-from qiskit.quantum_info import DensityMatrix, Statevector, partial_trace, state_fidelity
+from qiskit.quantum_info import DensityMatrix, Operator, partial_trace, state_fidelity
 
 from qscsop_pipeline.common.qiskit_facade.interfaces.i_qiskit_facade import IQiskitFacade
 
@@ -30,6 +30,12 @@ class QiskitFacade(IQiskitFacade):
     # NISQ di questo dataset stanno ampiamente sotto la soglia: superarla segnala un caso fuori
     # scope, da rifiutare esplicitamente invece che tentare un'allocazione insostenibile.
     _MAX_PARTIAL_TRACE_QUBITS = 12
+
+    # Stesso ordine di grandezza del limite sopra, applicato al ramo a stessa dimensione: la
+    # matrice unitaria di Operator e' anch'essa 2^N x 2^N complessi (in piu', non solo 2^N come lo
+    # Statevector che sostituisce). Prima dell'introduzione di Operator questo ramo non aveva un
+    # limite perche' Statevector era economico (O(2^N), non O(4^N)); ora serve la stessa guardia.
+    _MAX_OPERATOR_QUBITS = 12
 
     # Tolleranza sulla fidelity: due stati identici danno 1.0 a meno dell'errore numerico in
     # virgola mobile accumulato da partial_trace e dalla radice di matrice interna a state_fidelity.
@@ -90,9 +96,14 @@ class QiskitFacade(IQiskitFacade):
     def check_equivalence(self, baseline_code: str, new_code: str) -> bool:
         """Isola entrambi i codici e verifica se sono funzionalmente equivalenti.
 
-        A parita' di qubit il confronto e' diretto fra Statevector; se il numero di qubit
-        differisce (caso tipico di una correzione Idle Qubits riuscita, che ne rimuove uno) si
-        passa al confronto via partial_trace, vedi _check_equivalence_across_dimensions.
+        A parita' di qubit il confronto e' RIGOROSO: si costruisce l'Operator (matrice unitaria
+        completa) di entrambi i circuiti, valido per qualunque stato di ingresso per costruzione —
+        non solo per |0...0>. Se il numero di qubit differisce (caso tipico di una correzione Idle
+        Qubits riuscita, che ne rimuove uno) l'operatore unitario completo non si applica (le
+        dimensioni non coincidono): si passa al confronto via partial_trace, un campione PRAGMATICO
+        di due stati di ingresso (|0...0> e |1...1>), non esaustivo — vedi
+        _check_equivalence_across_dimensions per il dettaglio e la motivazione della differenza di
+        rigore tra i due rami.
 
         Il chiamante deve aver gia' verificato compile_circuit(new_code) prima di arrivare qui:
         un'eccezione di isolamento non viene gestita, ma propagata.
@@ -100,10 +111,10 @@ class QiskitFacade(IQiskitFacade):
         baseline_circuit = self.isolate_circuit(baseline_code)
         new_circuit = self.isolate_circuit(new_code)
 
-        # Guardia esplicita PRIMA di toccare qualunque misura: lo Statevector rappresenta lo
-        # stato quantistico PURO e non puo' modellare feedback classico. Un circuito con
-        # istruzioni condizionate da bit classici (c_if legacy / if_test -> control-flow op) e'
-        # fuori scope e non va confrontato silenziosamente.
+        # Guardia esplicita PRIMA di toccare qualunque misura: sia Operator che DensityMatrix
+        # rappresentano l'evoluzione di uno stato quantistico PURO e non possono modellare feedback
+        # classico. Un circuito con istruzioni condizionate da bit classici (c_if legacy / if_test
+        # -> control-flow op) e' fuori scope e non va confrontato silenziosamente.
         self._reject_classical_feedback(baseline_circuit)
         self._reject_classical_feedback(new_circuit)
 
@@ -113,10 +124,38 @@ class QiskitFacade(IQiskitFacade):
         if baseline_pure.num_qubits != new_pure.num_qubits:
             return self._check_equivalence_across_dimensions(baseline_pure, new_pure)
 
-        baseline_state = Statevector.from_instruction(baseline_pure)
-        new_state = Statevector.from_instruction(new_pure)
+        return self._check_equivalence_same_dimension(baseline_pure, new_pure)
 
-        return baseline_state.equiv(new_state)
+    @classmethod
+    def _check_equivalence_same_dimension(
+        cls, baseline_circuit: QuantumCircuit, new_circuit: QuantumCircuit
+    ) -> bool:
+        """Confronta due circuiti con lo STESSO numero di qubit via Operator (matrice unitaria).
+
+        A differenza di uno Statevector (che testa solo il comportamento a partire da |0...0>),
+        Operator rappresenta l'intera trasformazione applicata dal circuito: due Operator
+        equivalenti garantiscono stessa uscita per QUALUNQUE stato di ingresso, non solo il
+        default. Questo chiude un falso positivo reale osservato in produzione: due circuiti
+        composti esclusivamente da gate condizionati (es. Toffoli) restano entrambi inerti da
+        |0...0> indipendentemente da quanto siano strutturalmente diversi, e uno Statevector non
+        li avrebbe mai distinti.
+        """
+        num_qubits = baseline_circuit.num_qubits
+
+        # Controllo PRIMA di costruire qualunque Operator: la matrice unitaria e' 2^N x 2^N
+        # complessi, cresce piu' rapidamente della DensityMatrix limitata sopra (stessa soglia,
+        # stesso motivo: oltre 12 qubit l'allocazione diventa insostenibile).
+        if num_qubits > cls._MAX_OPERATOR_QUBITS:
+            raise ValueError(
+                f"Circuito troppo grande per il confronto di equivalenza via Operator "
+                f"({num_qubits} qubit, limite {cls._MAX_OPERATOR_QUBITS}) — "
+                f"validazione non eseguita."
+            )
+
+        baseline_op = Operator(baseline_circuit)
+        new_op = Operator(new_circuit)
+
+        return baseline_op.equiv(new_op, atol=cls._EQUIVALENCE_TOLERANCE)
 
     @classmethod
     def _check_equivalence_across_dimensions(
@@ -124,13 +163,43 @@ class QiskitFacade(IQiskitFacade):
     ) -> bool:
         """Confronta due circuiti con numero di qubit diverso tracciando via i qubit in eccesso.
 
-        Uno Statevector ha dimensione 2^N: due circuiti con N diverso non sono confrontabili
-        direttamente. Si riduce allora il circuito piu' grande con partial_trace, che risponde
-        esattamente alla domanda "ignorando questi qubit, cosa si osserva sul resto?". Se il qubit
-        tracciato via era davvero idle (non correlato agli altri) la riduzione restituisce
-        esattamente lo stato del circuito piu' piccolo; se era invece entangled, produce uno stato
-        MISTO, distinguibile da qualunque stato puro ridotto — il confronto fallisce correttamente,
-        senza diventare permissivo solo perche' le dimensioni sono cambiate.
+        DIFFERENZA DI RIGORE rispetto a _check_equivalence_same_dimension: qui l'operatore
+        unitario completo non si applica (le due dimensioni non coincidono), quindi non esiste un
+        confronto valido per QUALUNQUE stato di ingresso come per il ramo a stessa dimensione. La
+        soluzione adottata e' PRAGMATICA, non esaustiva: si ripete il confronto partial_trace per
+        due soli stati di ingresso, |0...0> (il default implicito di from_instruction, comportamento
+        storico) e |1...1> (tutti i qubit invertiti via _prepare_flipped_variant). Il risultato
+        complessivo e' equivalente solo se ENTRAMBI i campioni lo sono. Due campioni bastano a
+        smascherare il caso reale osservato in produzione (gate Toffoli/ccx concatenati, inerti da
+        |0...0> ma attivi da |1...1>), ma non costituiscono una prova di equivalenza di canale
+        quantistico completa: un futuro miglioramento potrebbe ampliare il campione; la piena
+        equivalenza per dimensioni diverse resta fuori scope per questo progetto.
+
+        Per ciascuno stato di ingresso, uno Statevector ha dimensione 2^N: due circuiti con N
+        diverso non sono confrontabili direttamente. Si riduce allora il circuito piu' grande con
+        partial_trace, che risponde esattamente alla domanda "ignorando questi qubit, cosa si
+        osserva sul resto?". Se il qubit tracciato via era davvero idle (non correlato agli altri)
+        la riduzione restituisce esattamente lo stato del circuito piu' piccolo; se era invece
+        entangled, produce uno stato MISTO, distinguibile da qualunque stato puro ridotto — il
+        confronto fallisce correttamente, senza diventare permissivo solo perche' le dimensioni
+        sono cambiate.
+        """
+        return cls._partial_trace_equivalent(
+            first_circuit, second_circuit
+        ) and cls._partial_trace_equivalent(
+            cls._prepare_flipped_variant(first_circuit),
+            cls._prepare_flipped_variant(second_circuit),
+        )
+
+    @classmethod
+    def _partial_trace_equivalent(
+        cls, first_circuit: QuantumCircuit, second_circuit: QuantumCircuit
+    ) -> bool:
+        """Esegue il confronto partial_trace fra due circuiti per il loro stato di ingresso attuale.
+
+        Fattorizzata fuori da _check_equivalence_across_dimensions per essere riusata identica sia
+        sui circuiti originali (stato di ingresso |0...0>) sia sulla loro variante con tutti i
+        qubit invertiti (stato di ingresso |1...1>), senza duplicare guardia e ciclo.
         """
         larger_circuit, smaller_circuit = (
             (first_circuit, second_circuit)
@@ -167,12 +236,26 @@ class QiskitFacade(IQiskitFacade):
         return False
 
     @staticmethod
+    def _prepare_flipped_variant(circuit: QuantumCircuit) -> QuantumCircuit:
+        """Ritorna una copia del circuito con X su ogni qubit anteposto.
+
+        Serve a testare il comportamento del circuito partendo da |1...1> invece di |0...0> (il
+        default implicito di from_instruction), per smascherare circuiti composti da gate
+        condizionati (es. Toffoli) che restano inerti da |0...0> indipendentemente da quanto siano
+        strutturalmente diversi.
+        """
+        flipped = circuit.copy_empty_like()
+        flipped.x(range(circuit.num_qubits))
+        flipped.compose(circuit, inplace=True)
+        return flipped
+
+    @staticmethod
     def _reject_classical_feedback(circuit: QuantumCircuit) -> None:
         """Solleva se il circuito contiene istruzioni condizionate da bit classici (fuori scope).
 
         In Qiskit 2.x il feedback classico (c_if / if_test) e' modellato da control-flow op
         (IfElseOp, WhileLoopOp, SwitchCaseOp); l'attributo legacy .condition e' controllato in
-        aggiunta per robustezza. Casi del genere non sono confrontabili via Statevector.
+        aggiunta per robustezza. Casi del genere non sono confrontabili via Operator/DensityMatrix.
         """
         for instruction in circuit.data:
             operation = instruction.operation
@@ -184,7 +267,7 @@ class QiskitFacade(IQiskitFacade):
 
     @staticmethod
     def _strip_measurements(circuit: QuantumCircuit) -> QuantumCircuit:
-        """Ritorna una copia del circuito senza istruzioni measure, per il confronto Statevector.
+        """Ritorna una copia del circuito senza istruzioni measure, per il confronto di equivalenza.
 
         Le misure vengono rimosse OVUNQUE si trovino, non solo se "finali" secondo il DAG:
         necessario per pattern come misure per-qubit intervallate da barrier (vedi idq-fixed.py),
