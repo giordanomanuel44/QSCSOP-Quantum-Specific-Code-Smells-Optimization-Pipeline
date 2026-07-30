@@ -6,6 +6,7 @@ from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
 from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgramEntity
+from qscsop_pipeline.qscsop.mas.dto.failure_reason import FailureReason
 from qscsop_pipeline.qscsop.mas.interfaces.i_detector_agent import IDetectorAgent
 from qscsop_pipeline.qscsop.mas.interfaces.i_mas_engine import IMASEngine
 from qscsop_pipeline.qscsop.mas.interfaces.i_refactorer_agent import IRefactorerAgent
@@ -80,6 +81,7 @@ class MASEngine(IMASEngine):
                 entity.get_evaluation().update_result(
                     is_functionally_equivalent=False, status=EvaluationStatus.OPT_FAILED
                 )
+                entity.get_evaluation().set_failure_reason(validation_result.get_failure_reason())
                 return entity
         except Exception:
             logger.exception(
@@ -89,6 +91,7 @@ class MASEngine(IMASEngine):
             entity.get_evaluation().update_result(
                 is_functionally_equivalent=False, status=EvaluationStatus.OPT_FAILED
             )
+            entity.get_evaluation().set_failure_reason(FailureReason.UNEXPECTED_ERROR)
             return entity
 
     @staticmethod

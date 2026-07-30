@@ -1,5 +1,6 @@
 import pytest
 
+from qscsop_pipeline.qscsop.mas.dto.failure_reason import FailureReason
 from qscsop_pipeline.qscsop.mas.dto.validation_result_dto import ValidationResultDTO
 
 
@@ -15,6 +16,7 @@ def test_constructor_and_getters_valid_result() -> None:
     assert dto.get_is_valid() is True
     assert dto.get_raw_error_data() is None
     assert dto.get_new_metrics() == metrics
+    assert dto.get_failure_reason() is None
 
 
 @pytest.mark.unit
@@ -24,6 +26,28 @@ def test_constructor_and_getters_invalid_result() -> None:
     assert dto.get_is_valid() is False
     assert dto.get_raw_error_data() == "SyntaxError: ..."
     assert dto.get_new_metrics() is None
+    assert dto.get_failure_reason() is None
+
+
+@pytest.mark.unit
+def test_constructor_accepts_explicit_failure_reason() -> None:
+    dto = ValidationResultDTO(
+        is_valid=False,
+        raw_error_data="SyntaxError: ...",
+        new_metrics=None,
+        failure_reason=FailureReason.COMPILATION_FAILED,
+    )
+
+    assert dto.get_failure_reason() == FailureReason.COMPILATION_FAILED
+
+
+@pytest.mark.unit
+def test_set_failure_reason_updates_field() -> None:
+    dto = ValidationResultDTO(is_valid=True, raw_error_data=None, new_metrics={})
+
+    dto.set_failure_reason(FailureReason.NOT_EQUIVALENT)
+
+    assert dto.get_failure_reason() == FailureReason.NOT_EQUIVALENT
 
 
 @pytest.mark.unit

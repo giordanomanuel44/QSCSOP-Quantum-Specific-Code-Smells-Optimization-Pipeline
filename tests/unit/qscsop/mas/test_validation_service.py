@@ -3,6 +3,7 @@ from unittest.mock import Mock
 import pytest
 
 from qscsop_pipeline.common.qiskit_facade.interfaces.i_qiskit_facade import IQiskitFacade
+from qscsop_pipeline.qscsop.mas.dto.failure_reason import FailureReason
 from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
 
 BASELINE_CODE = "qc = QuantumCircuit(1)\nqc.x(0)\n"
@@ -42,6 +43,7 @@ def test_validate_stops_at_compile_failure() -> None:
     assert result.get_is_valid() is False
     assert result.get_raw_error_data() == "SyntaxError: invalid syntax"
     assert result.get_new_metrics() is None
+    assert result.get_failure_reason() == FailureReason.COMPILATION_FAILED
     facade.check_equivalence.assert_not_called()
     facade.calculate_metrics.assert_not_called()
 
@@ -58,6 +60,7 @@ def test_validate_stops_at_equivalence_failure() -> None:
     assert isinstance(result.get_raw_error_data(), str)
     assert result.get_raw_error_data() != ""
     assert result.get_new_metrics() is None
+    assert result.get_failure_reason() == FailureReason.NOT_EQUIVALENT
     facade.calculate_metrics.assert_not_called()
 
 
@@ -73,6 +76,7 @@ def test_validate_succeeds_and_returns_calculated_metrics() -> None:
     assert result.get_is_valid() is True
     assert result.get_raw_error_data() is None
     assert result.get_new_metrics() == IMPROVED_METRICS
+    assert result.get_failure_reason() is None
 
 
 @pytest.mark.unit
@@ -108,6 +112,7 @@ def test_validate_returns_terminal_dto_when_check_equivalence_raises() -> None:
     assert result.get_new_metrics() is None
     assert result.get_raw_error_data() is not None
     assert "NotImplementedError" in result.get_raw_error_data()
+    assert result.get_failure_reason() == FailureReason.UNEXPECTED_ERROR
 
 
 @pytest.mark.unit
@@ -125,6 +130,7 @@ def test_validate_returns_terminal_dto_when_calculate_metrics_raises() -> None:
     assert result.get_new_metrics() is None
     assert result.get_raw_error_data() is not None
     assert "ValueError" in result.get_raw_error_data()
+    assert result.get_failure_reason() == FailureReason.UNEXPECTED_ERROR
 
 
 @pytest.mark.unit
@@ -149,6 +155,7 @@ def test_validate_rejects_identity_refactoring() -> None:
     assert "gateCount=10" in error
     assert "depth=8" in error
     assert "qubit=3" in error
+    assert result.get_failure_reason() == FailureReason.METRICS_NOT_IMPROVED
 
 
 @pytest.mark.unit

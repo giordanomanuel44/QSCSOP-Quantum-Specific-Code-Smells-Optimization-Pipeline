@@ -3,6 +3,7 @@
 from typing import Optional
 
 from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
+from qscsop_pipeline.qscsop.mas.dto.failure_reason import FailureReason
 
 
 class EvaluationData:
@@ -13,6 +14,7 @@ class EvaluationData:
         self._iteration_count: int = 0
         self._status: EvaluationStatus = EvaluationStatus.PROCESSING
         self._detected_smells: list[str] = []
+        self._failure_reason: Optional[FailureReason] = None
 
     def get_is_functionally_equivalent(self) -> Optional[bool]:
         return self._is_functionally_equivalent
@@ -40,6 +42,12 @@ class EvaluationData:
         """Memorizza una copia di value, per non condividere il riferimento con il chiamante."""
         self._detected_smells = list(value)
 
+    def get_failure_reason(self) -> Optional[FailureReason]:
+        return self._failure_reason
+
+    def set_failure_reason(self, value: Optional[FailureReason]) -> None:
+        self._failure_reason = value
+
     def increment_iteration_count(self) -> None:
         """Incrementa di uno il contatore di iterazioni del ciclo detect-refactor-validate."""
         self.set_iteration_count(self.get_iteration_count() + 1)
@@ -53,11 +61,17 @@ class EvaluationData:
         """Serializza la valutazione.
 
         Nota: la chiave "detected_smells" resta con underscore (non camelCase come le altre)
-        per fedeltà al class diagram di tesi, che presenta la stessa incoerenza.
+        per fedeltà al class diagram di tesi, che presenta la stessa incoerenza. "failureReason"
+        non è previsto da alcun diagramma, quindi segue la convenzione camelCase delle altre
+        chiavi ed è inclusa SOLO SE valorizzata (mai serializzata come null), stesso pattern di
+        "refactored" in QuantumProgramEntity.to_dict().
         """
-        return {
+        result = {
             "isFunctionallyEquivalent": self._is_functionally_equivalent,
             "iterationCount": self._iteration_count,
             "status": self._status.value,
             "detected_smells": self.get_detected_smells(),
         }
+        if self._failure_reason is not None:
+            result["failureReason"] = self._failure_reason.value
+        return result

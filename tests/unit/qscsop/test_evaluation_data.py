@@ -4,6 +4,7 @@ import pytest
 
 from qscsop_pipeline.qscsop.entities.evaluation_data import EvaluationData
 from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
+from qscsop_pipeline.qscsop.mas.dto.failure_reason import FailureReason
 
 
 @pytest.mark.unit
@@ -14,6 +15,7 @@ def test_default_state() -> None:
     assert evaluation.get_is_functionally_equivalent() is None
     assert evaluation.get_iteration_count() == 0
     assert evaluation.get_detected_smells() == []
+    assert evaluation.get_failure_reason() is None
 
 
 @pytest.mark.unit
@@ -24,11 +26,13 @@ def test_setters_update_fields() -> None:
     evaluation.set_iteration_count(4)
     evaluation.set_is_functionally_equivalent(False)
     evaluation.set_detected_smells(["LongCircuit"])
+    evaluation.set_failure_reason(FailureReason.NOT_EQUIVALENT)
 
     assert evaluation.get_status() == EvaluationStatus.OPT_FAILED
     assert evaluation.get_iteration_count() == 4
     assert evaluation.get_is_functionally_equivalent() is False
     assert evaluation.get_detected_smells() == ["LongCircuit"]
+    assert evaluation.get_failure_reason() == FailureReason.NOT_EQUIVALENT
 
 
 @pytest.mark.unit
@@ -101,3 +105,26 @@ def test_to_dict_serializes_status_as_plain_string() -> None:
     serialized = json.dumps(evaluation.to_dict())
 
     assert '"status": "PROCESSING"' in serialized
+
+
+@pytest.mark.unit
+def test_to_dict_omits_failure_reason_when_not_set() -> None:
+    evaluation = EvaluationData()
+
+    result = evaluation.to_dict()
+
+    assert "failureReason" not in result
+
+
+@pytest.mark.unit
+def test_to_dict_includes_failure_reason_as_plain_string_when_set() -> None:
+    evaluation = EvaluationData()
+    evaluation.set_failure_reason(FailureReason.UNEXPECTED_ERROR)
+
+    result = evaluation.to_dict()
+
+    assert result["failureReason"] == "unexpected_error"
+
+    serialized = json.dumps(result)
+
+    assert '"failureReason": "unexpected_error"' in serialized

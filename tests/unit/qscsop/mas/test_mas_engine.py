@@ -6,6 +6,7 @@ from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
 from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgramEntity
+from qscsop_pipeline.qscsop.mas.dto.failure_reason import FailureReason
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
 from qscsop_pipeline.qscsop.mas.dto.validation_result_dto import ValidationResultDTO
 from qscsop_pipeline.qscsop.mas.interfaces.i_detector_agent import IDetectorAgent
@@ -56,6 +57,7 @@ def test_process_entity_smell_free_skips_refactoring_cycle() -> None:
     assert result.get_evaluation().get_status() == EvaluationStatus.SMELL_FREE
     assert result.get_refactored() is None
     assert result.get_evaluation().get_detected_smells() == []
+    assert result.get_evaluation().get_failure_reason() is None
     collaborators["refactorer_agent"].refactor.assert_not_called()
     collaborators["validation_service"].validate.assert_not_called()
     collaborators["reviewer_agent"].review.assert_not_called()
@@ -80,6 +82,7 @@ def test_process_entity_succeeds_on_first_attempt() -> None:
     assert result.get_evaluation().get_status() == EvaluationStatus.OPTIMIZED
     assert result.get_evaluation().get_is_functionally_equivalent() is True
     assert result.get_evaluation().get_iteration_count() == 1
+    assert result.get_evaluation().get_failure_reason() is None
     refactored = result.get_refactored()
     assert refactored is not None
     assert refactored.get_source_code() == "qc.x(0)\n"
@@ -114,6 +117,7 @@ def test_process_entity_fails_once_then_succeeds() -> None:
 
     assert result.get_evaluation().get_status() == EvaluationStatus.OPTIMIZED
     assert result.get_evaluation().get_iteration_count() == 2
+    assert result.get_evaluation().get_failure_reason() is None
     assert collaborators["refactorer_agent"].refactor.call_count == 2
     first_call_args = collaborators["refactorer_agent"].refactor.call_args_list[0].args
     second_call_args = collaborators["refactorer_agent"].refactor.call_args_list[1].args
@@ -133,7 +137,10 @@ def test_process_entity_exhausts_iterations() -> None:
     collaborators["detector_agent"].detect_smell.return_value = smell_report
     collaborators["refactorer_agent"].refactor.return_value = "attempt"
     invalid_result = ValidationResultDTO(
-        is_valid=False, raw_error_data="non equivalente", new_metrics=None
+        is_valid=False,
+        raw_error_data="non equivalente",
+        new_metrics=None,
+        failure_reason=FailureReason.NOT_EQUIVALENT,
     )
     collaborators["validation_service"].validate.return_value = invalid_result
     collaborators["reviewer_agent"].review.return_value = "correggi"
@@ -148,6 +155,10 @@ def test_process_entity_exhausts_iterations() -> None:
     assert result.get_evaluation().get_is_functionally_equivalent() is False
     assert result.get_refactored() is None
     assert result.get_evaluation().get_iteration_count() == 2
+    # failure_reason dell'entita' deve coincidere con quello dell'ULTIMO tentativo (quello che
+    # ha fatto uscire dal loop per esaurimento iterazioni), non un valore hardcoded in MASEngine.
+    assert result.get_evaluation().get_failure_reason() == invalid_result.get_failure_reason()
+    assert result.get_evaluation().get_failure_reason() == FailureReason.NOT_EQUIVALENT
 
 
 @pytest.mark.unit
@@ -161,6 +172,7 @@ def test_process_entity_never_propagates_unexpected_exception() -> None:
 
     assert result.get_evaluation().get_status() == EvaluationStatus.OPT_FAILED
     assert result.get_evaluation().get_is_functionally_equivalent() is False
+    assert result.get_evaluation().get_failure_reason() == FailureReason.UNEXPECTED_ERROR
 
 
 @pytest.mark.unit
