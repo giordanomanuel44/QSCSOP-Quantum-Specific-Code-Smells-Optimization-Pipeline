@@ -51,9 +51,9 @@ if __name__ == "__main__":
     # classificazione corretto al primo colpo, dove RefactorerAgent/ReviewerAgent tollerano
     # meglio l'approssimazione essendo corretti dal ciclo iterativo di validazione/review. Vedi
     # qscsop_pipeline/qscsop/mas/llm_config.py
-    detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
+    detector_llm = LLM(model=DETECTOR_MODEL, temperature=0.6)
     # Una singola istanza per ReviewerAgent.
-    agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
+    agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0.6)
 
     detector_agent = DetectorAgent(llm=detector_llm)
     refactorer_agent = RefactorerAgent(llm=detector_llm)

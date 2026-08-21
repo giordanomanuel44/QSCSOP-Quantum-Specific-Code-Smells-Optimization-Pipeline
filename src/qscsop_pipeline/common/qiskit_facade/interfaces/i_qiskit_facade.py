@@ -40,6 +40,11 @@ class IQiskitFacade(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def is_qubit_idle(self, source_code: str, qubit_index: int) -> bool:
+        """Isola il codice e verifica se il qubit indicato resta inerte (fisso e scorrelato)."""
+        raise NotImplementedError
+
+    @abstractmethod
     def calculate_metrics(self, code: str) -> dict:
         """Isola, transpila e ritorna logicalQubits + abstractMetrics + physicalMetrics.
 

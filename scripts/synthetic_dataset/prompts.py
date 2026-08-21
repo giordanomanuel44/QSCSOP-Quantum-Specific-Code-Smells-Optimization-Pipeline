@@ -42,10 +42,16 @@ class GeneratedCircuit(BaseModel):
     #    reasoning che descrive un pattern diverso dal codice realmente scritto (es. record 2/7
     #    del lotto idle_qubits: dichiarato "doppio H su q2", il codice conteneva un solo H).
     reasoning: str
-    # 5. intended_smells resta ULTIMO: deve formalizzare la conclusione di reasoning senza
-    #    contraddirla (lista vuota se il circuito e' pulito), stessa logica di
-    #    detected_smell_types nel Detector.
+    # 5. intended_smells formalizza la conclusione di reasoning senza contraddirla (lista vuota
+    #    se il circuito e' pulito), stessa logica di detected_smell_types nel Detector.
     intended_smells: list[QuantumSmellType]
+    # 6. simplified_source_code e' ULTIMO perche' e' una CONSEGUENZA della dichiarazione appena
+    #    fatta: si scrive solo dopo aver deciso che il circuito e' long_circuit, e serve a rendere
+    #    quella dichiarazione verificabile a macchina (verification.verify_declared_simplification
+    #    confronta i due circuiti via QiskitFacade.check_equivalence) invece che affidata alla
+    #    prosa di reasoning, piu' volte trovata falsa in revisione manuale. None per i circuiti
+    #    che non dichiarano long_circuit.
+    simplified_source_code: str | None = None
 
 
 class GenerationBatch(BaseModel):
@@ -370,6 +376,19 @@ exhibits the other one), REWRITE source_code before finalizing this entry, then 
 against the corrected code -- do not leave a mismatch between reasoning and intended_smells, and \
 do not leave source_code out of sync with the analysis that follows it.
 
+STEP 5 -- SIMPLIFIED VERSION (fill simplified_source_code): ONLY IF intended_smells contains \
+"long_circuit", write a SECOND, complete, runnable Qiskit snippet that is the shorter version of \
+the circuit you claim exists -- the same computation reached with fewer operations, with the \
+redundant or indirect sequence replaced by its direct equivalent (as the "Fixed" snippets in the \
+examples above do). It must be functionally EQUIVALENT to source_code (same qubits, in the same \
+order, unless the circuit also exhibits Idle Qubits and the fix removes an unused one) and must \
+assign its circuit to a variable exactly like source_code does. This snippet is \
+compared to source_code by an automated equivalence check: a claim of redundancy that you cannot \
+back with an actually equivalent shorter circuit is a WRONG claim -- if you cannot write one, the \
+circuit does not exhibit Long Circuit, so go back to STEP 4 and remove "long_circuit" from \
+intended_smells (or rewrite source_code so that it genuinely does). Leave this field null when \
+intended_smells does not contain "long_circuit".
+
 WARNING: the risk here is the mirror image of a known failure mode in circuit DETECTION -- citing \
 a pattern from one of the few-shot examples above instead of verifying the specific source_code \
 you just generated. Your line_by_line_expansion and qubit_operation_analysis must describe THIS \
@@ -379,7 +398,7 @@ source_code above it line-for-line, fix the mismatch before moving on."""
 
 _OUTPUT_FORMAT_INSTRUCTIONS = """OUTPUT FORMAT
 Respond with a structured object containing a single field "circuits": a list of exactly \
-{total_circuits} circuit objects. Each circuit object has five fields, in this order: \
+{total_circuits} circuit objects. Each circuit object has six fields, in this order: \
 source_code (a complete, runnable Qiskit Python snippet that assigns the circuit to a variable, \
 in the same flat, direct style as the examples above), line_by_line_expansion (mechanical \
 transcription of every gate line of source_code into 'gate_name -> qubit_index' entries, with \
@@ -388,7 +407,9 @@ grouping of the operations listed in line_by_line_expansion, noting any cancella
 resulting state), reasoning (a technical explanation, grounded in qubit_operation_analysis, of \
 where the declared smell(s) are in the circuit's real behavior, or why the circuit is clean), and \
 intended_smells (a list containing zero, one, or both of "long_circuit" / "idle_qubits" -- empty \
-for clean circuits, exactly matching the conclusion in reasoning). Do not include any text \
+for clean circuits, exactly matching the conclusion in reasoning), and simplified_source_code (a \
+complete, runnable Qiskit snippet with the shorter circuit equivalent to source_code -- REQUIRED \
+whenever intended_smells contains "long_circuit", null otherwise). Do not include any text \
 outside the structured object."""
 
 
@@ -433,7 +454,7 @@ BATCH_THEMES: list[BatchTheme] = [
             "identities (e.g. a gate sequence that implements a known single- or two-qubit "
             "operation through an indirect path)."
         ),
-        count_smelly=8,
+        count_smelly=25,
         count_clean=0,
     ),
     BatchTheme(
@@ -446,7 +467,7 @@ BATCH_THEMES: list[BatchTheme] = [
             "behavior contributes nothing to the outcome, either because it receives no genuine "
             "operation or because its operations cancel out into a fixed, predictable state."
         ),
-        count_smelly=8,
+        count_smelly=5,
         count_clean=0,
     ),
     BatchTheme(
@@ -459,7 +480,7 @@ BATCH_THEMES: list[BatchTheme] = [
             "within the same circuit (e.g. one qubit wasted through cancellation, another "
             "involved in a redundant/indirect gate sequence)."
         ),
-        count_smelly=10,
+        count_smelly=15,
         count_clean=0,
     ),
     BatchTheme(
@@ -471,7 +492,7 @@ BATCH_THEMES: list[BatchTheme] = [
             "IDLE QUBITS smell (and NOT Long Circuit), using registers large enough to "
             "plausibly hide an unused or cancelled-out qubit among genuinely active ones."
         ),
-        count_smelly=7,
+        count_smelly=10,
         count_clean=0,
     ),
     BatchTheme(
@@ -486,7 +507,7 @@ BATCH_THEMES: list[BatchTheme] = [
             "locally recognizable (a specific sub-sequence, or a specific qubit), not something "
             "that requires reasoning about the whole register at once."
         ),
-        count_smelly=12,
+        count_smelly=10,
         count_clean=0,
     ),
     BatchTheme(
@@ -501,7 +522,7 @@ BATCH_THEMES: list[BatchTheme] = [
             "resemble plausible, purposeful quantum code, not minimal filler."
         ),
         count_smelly=0,
-        count_clean=15,
+        count_clean=0,
     ),
 ]
 

@@ -17,7 +17,8 @@ from qiskit.quantum_info import Statevector
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
 from qscsop_pipeline.qscsop.mas.dto.quantum_smell_type import QuantumSmellType
-from scripts.synthetic_dataset.prompts import GeneratedCircuit
+from scripts.synthetic_dataset.prompts import GeneratedCircuit, BatchTheme, SmellFocus
+import re
 
 
 def structural_idle_check(source_code: str, facade: QiskitFacade) -> dict:
@@ -37,9 +38,8 @@ def structural_idle_check(source_code: str, facade: QiskitFacade) -> dict:
     Z: e' idle nel comportamento risultante (stessa definizione usata da DetectorAgent), ma
     "touched" per questo conteggio, perche' riceve gate reali. Riconoscere la cancellazione
     netta richiede simulare lo stato, non solo contare le operazioni -- fuori scope per un
-    controllo puramente strutturale. Stessa dinamica del limite gia' documentato per Long
-    Circuit in verify_generated_circuit: ci si affida al campionamento con DetectorAgent per
-    questi casi piu' sottili.
+    controllo puramente strutturale. Quel caso e' coperto da verify_declared_idle_qubits, che
+    delega la simulazione dello stato del singolo qubit a QiskitFacade.is_qubit_idle.
     """
     circuit = facade.isolate_circuit(source_code)
 
@@ -97,8 +97,9 @@ def verify_generated_circuit(circuit: GeneratedCircuit, facade: QiskitFacade) ->
     semantica" -- l'identita' SWAP-via-coniugazione-H (Example 3 in prompts.py) lo dimostra:
     riconoscerla richiede algebra di gruppo, non e' enumerabile a priori per ogni circuito
     possibile. Per i circuiti etichettati long_circuit, questa funzione puo' solo confermare che
-    il circuito compila e non e' degenere: la verifica di merito si affida principalmente al
-    campionamento con DetectorAgent (vedi generate.py), non a un controllo strutturale qui.
+    il circuito compila e non e' degenere: la verifica di merito passa da
+    verify_declared_simplification (che confronta l'originale con la versione piu' corta fornita
+    dal generatore) e dal campionamento con DetectorAgent (vedi generate.py).
     """
     compiles, compile_error = facade.compile_circuit(circuit.source_code)
     if not compiles:
@@ -118,3 +119,98 @@ def verify_generated_circuit(circuit: GeneratedCircuit, facade: QiskitFacade) ->
         "idle_qubit_indices": idle_result["idle_qubit_indices"],
         "idle_declaration_consistent": idle_declaration_consistent,
     }
+
+def verify_declared_simplification(circuit: GeneratedCircuit, facade: QiskitFacade) -> bool | None:
+    """Verifica che il circuito semplificato dichiarato sia davvero equivalente all'originale.
+
+    Colma il limite documentato in verify_generated_circuit: la ridondanza semantica non e'
+    enumerabile a priori, ma se il generatore FORNISCE la versione piu' corta che sostiene esistere
+    (campo simplified_source_code), l'equivalenza fra le due diventa verificabile a macchina —
+    riusando lo stesso QiskitFacade.check_equivalence con cui ValidationService valida i
+    refactoring nel sistema reale, non un confronto reimplementato qui.
+
+    Ritorna None se il circuito non dichiara long_circuit (niente da verificare), False se lo
+    dichiara ma il campo e' assente/vuoto o i due circuiti non sono equivalenti, True se
+    l'equivalenza e' confermata. Diagnostica pura come il resto del modulo: qualunque eccezione di
+    isolamento o confronto (codice non compilabile, feedback classico, circuito oltre i limiti
+    dimensionali della facade) vale come verifica NON superata, non come errore da propagare.
+    """
+    if QuantumSmellType.LONG_CIRCUIT not in circuit.intended_smells:
+        return None
+
+    simplified_code = circuit.simplified_source_code
+    if not simplified_code or not simplified_code.strip():
+        return False
+
+    try:
+        return facade.check_equivalence(circuit.source_code, simplified_code)
+    except Exception:
+        return False
+
+
+def verify_declared_idle_qubits(circuit: GeneratedCircuit, facade: QiskitFacade) -> bool | None:
+    """Verifica a macchina che almeno un qubit sia davvero idle, non solo dichiarato tale.
+
+    Complementare a structural_idle_check, di cui copre esattamente il limite documentato: qui il
+    verdetto passa da QiskitFacade.is_qubit_idle, che simula lo stato del singolo qubit e cattura
+    quindi anche il caso "operazioni reali con effetto netto nullo" (due H consecutivi), quello su
+    cui il generatore ha sbagliato piu' spesso in pratica.
+
+    Ritorna None se il circuito non dichiara idle_qubits, True se almeno un qubit risulta
+    verificato come idle, False altrimenti. Stessa diagnostica pura: un'eccezione della facade vale
+    come verifica non superata.
+    """
+    if QuantumSmellType.IDLE_QUBITS not in circuit.intended_smells:
+        return None
+
+    try:
+        num_qubits = facade.isolate_circuit(circuit.source_code).num_qubits
+        return any(
+            facade.is_qubit_idle(circuit.source_code, index) for index in range(num_qubits)
+        )
+    except Exception:
+        return False
+
+
+def matches_batch_theme(circuit: GeneratedCircuit, theme: BatchTheme) -> bool:
+    """Verifica che intended_smells rispetti il focus dichiarato del lotto.
+
+    Cattura esattamente il problema visto: lotti IDLE_QUBITS_ONLY che generavano
+    circuiti puliti o addirittura long_circuit, invece del tema richiesto.
+    """
+    declared = {s.value for s in circuit.intended_smells}
+    focus = theme.smell_focus
+
+    if focus == SmellFocus.LONG_CIRCUIT_ONLY:
+        return declared == {"long_circuit"}
+    if focus == SmellFocus.IDLE_QUBITS_ONLY:
+        return declared == {"idle_qubits"}
+    if focus == SmellFocus.BOTH:
+        return declared == {"long_circuit", "idle_qubits"}
+    if focus == SmellFocus.NONE:
+        return declared == set()
+    return True
+
+def is_near_duplicate(circuit: GeneratedCircuit, already_accepted: list[GeneratedCircuit]) -> str | None:
+    """Confronta il circuito con quelli già accettati nello stesso lotto.
+
+    Due livelli: (a) codice sorgente identico dopo aver rimosso spazi/a-capo superflui
+    (cattura il caso visto nel lotto both_smells, dove 6 record erano byte-identici a
+    parte una costante numerica); (b) stessa identica sequenza di NOMI di gate, ignorando
+    quali qubit specifici vengono toccati (cattura duplicati "travestiti" con indici diversi).
+    Ritorna l'ID del circuito duplicato se trovato, altrimenti None.
+    """
+    normalized_new = " ".join(circuit.source_code.split())
+
+    for other in already_accepted:
+        normalized_other = " ".join(other.source_code.split())
+        if normalized_new == normalized_other:
+            return "identical_source"
+
+        # Confronto strutturale: sequenza dei nomi dei gate, ignorando gli indici
+        gates_new = re.findall(r"qc\.(\w+)\(", circuit.source_code)
+        gates_other = re.findall(r"qc\.(\w+)\(", other.source_code)
+        if gates_new == gates_other and len(gates_new) > 2:
+            return "same_gate_sequence"
+
+    return None

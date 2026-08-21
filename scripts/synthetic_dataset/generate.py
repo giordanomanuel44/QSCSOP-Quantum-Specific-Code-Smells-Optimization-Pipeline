@@ -37,7 +37,13 @@ from scripts.synthetic_dataset.prompts import (
     GenerationBatch,
     build_batch_prompt,
 )
-from scripts.synthetic_dataset.verification import verify_generated_circuit
+from scripts.synthetic_dataset.verification import (
+    is_near_duplicate,
+    matches_batch_theme,
+    verify_declared_idle_qubits,
+    verify_declared_simplification,
+    verify_generated_circuit,
+)
 
 # scripts/synthetic_dataset/generate.py -> risale alla root del progetto: un .parent in piu'
 # di scripts/fetch_datasets.py, perche' questo file vive un livello piu' in profondita'.
@@ -45,14 +51,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 OUTPUT_CIRCUITS_DIR = PROJECT_ROOT / "data" / "raw" / "synthetic"
 GROUND_TRUTH_PATH = PROJECT_ROOT / "data" / "interim" / "synthetic_ground_truth.jsonl"
 
-# Modello di default: sostituibile a riga di comando (--model) con un modello Claude via
-# LiteLLM/CrewAI (es. "anthropic/claude-sonnet-5") quando/se si decidera' di passare a quello.
-DEFAULT_MODEL = "ollama/qwen2.5-coder:14b"
+# Modello di default: sostituibile a riga di comando (--model)
+DEFAULT_MODEL = "ollama/qwen3-coder:30b"
 
 # Campiona 1 circuito ogni N per il confronto col DetectorAgent reale (Parte 5), non ogni
 # circuito: il DetectorAgent e' costoso (LLM reale), la verifica strutturale gia' copre gran
 # parte della diagnostica per Idle Qubits.
-DEFAULT_SAMPLE_EVERY = 5
+DEFAULT_SAMPLE_EVERY = 100000
 
 _JSON_FENCE_PATTERN = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL)
 
@@ -126,34 +131,46 @@ def _sample_with_detector_agent(
     return agrees
 
 
-def _process_circuit(
-    circuit: GeneratedCircuit,
-    theme: BatchTheme,
-    index: int,
-    facade: QiskitFacade,
-    detector_agent: DetectorAgent,
-    sample_every: int,
-    processed_count: int,
-) -> dict:
-    """Verifica, eventualmente scrive su disco e campiona un singolo circuito generato."""
+def _process_circuit(circuit, theme, index, facade, detector_agent, sample_every,
+                      processed_count, accepted_in_batch: list):
     circuit_id = _circuit_id(theme, index)
     verification = verify_generated_circuit(circuit, facade)
     structural_check_passed = not verification["discarded"]
 
-    detector_agreement: bool | None = None
-    if structural_check_passed:
+    # Verifiche semantiche delle dichiarazioni del generatore, entrambe None quando lo smell
+    # corrispondente non e' dichiarato. Eseguite solo se il circuito ha superato la verifica
+    # strutturale: su codice che non compila (o degenere) il verdetto sarebbe un False fuorviante,
+    # attribuito alla dichiarazione invece che al circuito gia' scartato a monte.
+    simplification_verified = (
+        verify_declared_simplification(circuit, facade) if structural_check_passed else None
+    )
+    idle_qubits_verified = (
+        verify_declared_idle_qubits(circuit, facade) if structural_check_passed else None
+    )
+
+    duplicate_of = is_near_duplicate(circuit, accepted_in_batch) if structural_check_passed else None
+    theme_consistent = matches_batch_theme(circuit, theme)
+
+    detector_agreement = None
+    if structural_check_passed and duplicate_of is None:
         _write_circuit_file(circuit_id, circuit.source_code)
+        accepted_in_batch.append(circuit)
         if processed_count % sample_every == 0:
             detector_agreement = _sample_with_detector_agent(detector_agent, circuit, circuit_id)
 
     return {
         "circuit_id": circuit_id,
         "source_code": circuit.source_code,
-        "intended_smells": [smell.value for smell in circuit.intended_smells],
+        "intended_smells": [s.value for s in circuit.intended_smells],
         "line_by_line_expansion": circuit.line_by_line_expansion,
         "qubit_operation_analysis": circuit.qubit_operation_analysis,
         "reasoning": circuit.reasoning,
         "structural_check_passed": structural_check_passed,
+        "simplified_source_code": circuit.simplified_source_code,
+        "simplification_verified": simplification_verified,
+        "idle_qubits_verified": idle_qubits_verified,
+        "duplicate_of": duplicate_of,
+        "theme_consistent": theme_consistent,
         "detector_agreement": detector_agreement,
         "generation_batch": theme.theme,
     }
@@ -161,7 +178,7 @@ def _process_circuit(
 
 def run_generation(model: str, sample_every: int) -> None:
     """Orchestra la generazione, verifica e scrittura su disco per tutti i BATCH_THEMES."""
-    llm = LLM(model=model, temperature=0.9)
+    llm = LLM(model=model, temperature=0.8)
     detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
     detector_agent = DetectorAgent(llm=detector_llm)
     facade = QiskitFacade()
@@ -175,6 +192,8 @@ def run_generation(model: str, sample_every: int) -> None:
             prompt = build_batch_prompt(theme)
             batch: GenerationBatch = generate_batch(llm, prompt, GenerationBatch)
 
+            accepted_in_batch = []
+
             for index, circuit in enumerate(batch.circuits, start=1):
                 processed_count += 1
                 record = _process_circuit(
@@ -185,6 +204,7 @@ def run_generation(model: str, sample_every: int) -> None:
                     detector_agent=detector_agent,
                     sample_every=sample_every,
                     processed_count=processed_count,
+                    accepted_in_batch=accepted_in_batch,
                 )
                 ground_truth_file.write(json.dumps(record, ensure_ascii=False) + "\n")
                 ground_truth_file.flush()

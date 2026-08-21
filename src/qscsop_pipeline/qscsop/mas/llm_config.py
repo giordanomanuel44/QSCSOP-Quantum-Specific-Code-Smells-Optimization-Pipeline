@@ -14,8 +14,8 @@ richiede un giudizio di classificazione corretto al primo colpo (un falso negati
 circuito smelly dal ciclo di ottimizzazione), mentre RefactorerAgent e ReviewerAgent tollerano
 meglio l'approssimazione, essendo corretti dal ciclo iterativo di validazione/review, e restano
 sul modello piu' piccolo e veloce. La dependency injection del modello per-agente, gia' prevista
-dall'architettura (CLAUDE.md punto 7), permette questa scelta senza alcuna modifica strutturale.
+dall'architettura, permette questa scelta senza alcuna modifica strutturale.
 """
 
-DETECTOR_MODEL = "ollama/qwen2.5-coder:14b"
-DEFAULT_AGENT_MODEL = "ollama/qwen2.5-coder:7b"
+DETECTOR_MODEL = "ollama/qwen3-coder:30b"
+DEFAULT_AGENT_MODEL = "ollama/qwen3-coder:30b"
