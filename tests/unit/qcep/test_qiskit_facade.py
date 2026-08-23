@@ -435,3 +435,149 @@ def test_calculate_metrics_reads_logical_qubits_before_transpilation(
     metrics = facade.calculate_metrics(BELL_SOURCE)
 
     assert metrics["logicalQubits"] == 2
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_on_untouched_qubit_is_true(facade: QiskitFacade) -> None:
+    # Caso strutturale: q2 non riceve alcuna operazione, resta in |0> e non e' correlato agli
+    # altri due (che sono entangled fra loro).
+    source_with_untouched_qubit = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(3)
+qc.h(0)
+qc.cx(0, 1)
+"""
+
+    assert facade.is_qubit_idle(source_with_untouched_qubit, 2) is True
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_on_cancelled_out_qubit_is_true(facade: QiskitFacade) -> None:
+    # Caso COMPORTAMENTALE, quello che il conteggio delle operazioni non puo' vedere: q2 riceve
+    # due H consecutivi (H*H = I) e poi soli gate di fase, che su |0> agiscono a meno di fase
+    # globale. Stesso pattern di idq-smelly.py, la definizione di Idle Qubits del progetto.
+    source_with_cancelling_gates = """
+from qiskit import QuantumRegister, QuantumCircuit
+from numpy import pi
+
+qreg_q = QuantumRegister(3, 'q')
+qc = QuantumCircuit(qreg_q)
+qc.h(qreg_q)
+qc.h(qreg_q[2])
+qc.p(pi / 8, qreg_q[2])
+qc.z(qreg_q[2])
+qc.s(qreg_q[2])
+"""
+
+    assert facade.is_qubit_idle(source_with_cancelling_gates, 2) is True
+    # q0 e q1 ricevono un solo H ciascuno: superposizione genuina, non idle.
+    assert facade.is_qubit_idle(source_with_cancelling_gates, 0) is False
+    assert facade.is_qubit_idle(source_with_cancelling_gates, 1) is False
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_on_single_meaningful_gate_is_false(facade: QiskitFacade) -> None:
+    # Distinzione esplicita del prompt di DetectorAgent: una singola X produce un esito
+    # deterministico (|1>) ma e' lavoro reale, NON un effetto netto nullo. "Esito prevedibile" da
+    # solo non basta a dichiarare idle: il criterio e' "torna nello stato |0> di partenza".
+    source_with_single_x = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.x(0)
+qc.h(1)
+"""
+
+    assert facade.is_qubit_idle(source_with_single_x, 0) is False
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_on_entangled_qubit_is_false(facade: QiskitFacade) -> None:
+    # Un qubit entangled ha stato ridotto MISTO: distinguibile da |0><0| anche quando la sua
+    # sequenza locale di gate sembra innocua (qui q1 riceve solo il target di una CX).
+    assert facade.is_qubit_idle(BELL_SOURCE, 1) is False
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_ignores_measurement_instructions(facade: QiskitFacade) -> None:
+    # Le misure vanno rimosse prima di costruire lo stato (stesso filtro di check_equivalence):
+    # un circuito che misura non deve far fallire la verifica.
+    measured_source = """
+from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
+
+qreg_q = QuantumRegister(2, 'q')
+creg_c = ClassicalRegister(2, 'c')
+qc = QuantumCircuit(qreg_q, creg_c)
+qc.h(qreg_q[0])
+qc.h(qreg_q[0])
+qc.x(qreg_q[1])
+qc.measure(qreg_q[0], creg_c[0])
+qc.measure(qreg_q[1], creg_c[1])
+"""
+
+    assert facade.is_qubit_idle(measured_source, 0) is True
+    assert facade.is_qubit_idle(measured_source, 1) is False
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_binds_free_parameters_to_a_non_identity_value(
+    facade: QiskitFacade,
+) -> None:
+    # Circuito parametrico (stile Example 4 di prompts.py, con un Parameter mai assegnato):
+    # DensityMatrix non accetta gate parametrici, quindi i Parameter liberi vanno legati. Il
+    # valore scelto deve essere non nullo, altrimenti ry(0) = I renderebbe q0 idle a torto.
+    parametric_source = """
+from qiskit import QuantumCircuit
+from qiskit.circuit import Parameter
+
+theta = Parameter('theta')
+qc = QuantumCircuit(2)
+qc.ry(theta, 0)
+"""
+
+    assert facade.is_qubit_idle(parametric_source, 0) is False
+    assert facade.is_qubit_idle(parametric_source, 1) is True
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_rejects_an_out_of_range_index(facade: QiskitFacade) -> None:
+    with pytest.raises(ValueError, match="fuori range"):
+        facade.is_qubit_idle(BELL_SOURCE, 5)
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_rejects_circuits_with_classical_feedback(facade: QiskitFacade) -> None:
+    # Stessa guardia di check_equivalence e per la stessa ragione: la DensityMatrix modella uno
+    # stato puro e non puo' rappresentare feedback classico.
+    conditional_source = """
+from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
+
+qreg_q = QuantumRegister(1, 'q')
+creg_c = ClassicalRegister(1, 'c')
+qc = QuantumCircuit(qreg_q, creg_c)
+qc.h(qreg_q[0])
+qc.measure(qreg_q[0], creg_c[0])
+with qc.if_test((creg_c, 1)):
+    qc.x(qreg_q[0])
+"""
+
+    with pytest.raises(NotImplementedError, match="feedback"):
+        facade.is_qubit_idle(conditional_source, 0)
+
+
+@pytest.mark.unit
+def test_is_qubit_idle_rejects_circuits_above_the_partial_trace_limit(
+    facade: QiskitFacade,
+) -> None:
+    # Il limite deve scattare PRIMA di costruire la DensityMatrix (2^13 x 2^13 sarebbe ~1 GB):
+    # il test resta istantaneo proprio perche' nessuna matrice viene mai allocata.
+    oversized_source = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(13)
+qc.h(0)
+"""
+
+    with pytest.raises(ValueError, match="13 qubit, limite 12"):
+        facade.is_qubit_idle(oversized_source, 0)

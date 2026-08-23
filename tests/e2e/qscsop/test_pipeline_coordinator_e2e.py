@@ -33,7 +33,7 @@ from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import ReviewerAgent
 from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL, DETECTOR_MODEL
 from qscsop_pipeline.qscsop.mas.mas_engine import MASEngine
 from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
-from qscsop_pipeline.qscsop.pipeline_coordinator import PipelineCoordinator
+from qscsop_pipeline.qscsop.coordinator.pipeline_coordinator import PipelineCoordinator
 from qscsop_pipeline.qscsop.sinks.jsonl_data_sink import JsonlDataSink
 
 # tests/e2e/qscsop/ -> risali a root repo, poi al dataset reale prodotto da QCEP.

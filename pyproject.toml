@@ -29,6 +29,9 @@ markers = [
     "e2e: test costosi con Qiskit/LLM reali, eseguiti manualmente",
 ]
 testpaths = ["tests"]
+# La root del progetto in sys.path: qscsop_pipeline e' installato (layout src/), ma scripts/ no --
+# e' tooling, non un package distribuito. Serve a importare scripts.synthetic_dataset nei test.
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100

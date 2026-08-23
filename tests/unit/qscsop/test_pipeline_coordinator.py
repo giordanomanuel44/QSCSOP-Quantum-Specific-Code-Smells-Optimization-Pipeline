@@ -5,7 +5,7 @@ import pytest
 from qscsop_pipeline.qscsop.interfaces.i_data_sink import IDataSink
 from qscsop_pipeline.qscsop.interfaces.i_dataset_adapter import IDatasetAdapter
 from qscsop_pipeline.qscsop.mas.interfaces.i_mas_engine import IMASEngine
-from qscsop_pipeline.qscsop.pipeline_coordinator import PipelineCoordinator
+from qscsop_pipeline.qscsop.coordinator.pipeline_coordinator import PipelineCoordinator
 
 
 def _make_collaborators() -> dict:
