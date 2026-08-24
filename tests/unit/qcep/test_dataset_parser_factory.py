@@ -2,6 +2,7 @@ import pytest
 
 from qscsop_pipeline.qcep.factories.dataset_parser_factory import DatasetParserFactory
 from qscsop_pipeline.qcep.parsers.bugs4q_dataset_parser import Bugs4QDatasetParser
+from qscsop_pipeline.qcep.parsers.synthetic_dataset_parser import SyntheticDatasetParser
 from qscsop_pipeline.qcep.parsers.the_smelly_eight_dataset_parser import (
     TheSmellyEightDatasetParser,
 )
@@ -26,6 +27,13 @@ def test_get_parser_thesmellyeight_returns_the_smelly_eight_parser(
     parser = factory.get_parser("thesmellyeight")
 
     assert isinstance(parser, TheSmellyEightDatasetParser)
+
+
+@pytest.mark.unit
+def test_get_parser_synthetic_returns_synthetic_parser(factory: DatasetParserFactory) -> None:
+    parser = factory.get_parser("synthetic")
+
+    assert isinstance(parser, SyntheticDatasetParser)
 
 
 @pytest.mark.unit

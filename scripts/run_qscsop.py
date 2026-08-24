@@ -3,13 +3,20 @@ Script di esecuzione della pipeline QSCSOP sul dataset arricchito prodotto da QC
 
 Istanzia le dipendenze concrete (QiskitFacade, i tre agenti LLM, ValidationService,
 MASEngine, JsonlDatasetAdapter, JsonlDataSink) e le inietta in PipelineCoordinator, poi
-lancia il ciclo detect-refactor-validate-review end-to-end su ogni circuito di
-data/interim/dataset_pulito.jsonl. Produce data/interim/risultati_dataset.jsonl.
+lancia il ciclo detect-refactor-validate-review end-to-end su ogni circuito del dataset
+di input.
 
 Uso (dalla root del progetto, con il venv attivo):
-    python scripts/run_qscsop.py
+    python scripts/run_qscsop.py                # dataset_pulito.jsonl -> risultati_dataset.jsonl
+    python scripts/run_qscsop.py --synthetic    # coppia sintetica dei due file
+
+--synthetic va usato sull'output della corrispondente esecuzione di run_qcep.py --synthetic:
+i due esperimenti restano su file distinti, cosi' che i risultati sui circuiti sintetici
+(di cui esiste la ground truth, joinabile su circuitId con synthetic_ground_truth_f.jsonl)
+non si mescolino a quelli sui dataset reali.
 """
 
+import argparse
 import logging
 from pathlib import Path
 
@@ -17,19 +24,23 @@ from crewai import LLM
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
 from qscsop_pipeline.qscsop.adapters.jsonl_dataset_adapter import JsonlDatasetAdapter
+from qscsop_pipeline.qscsop.coordinator.pipeline_coordinator import PipelineCoordinator
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
 from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import RefactorerAgent
 from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import ReviewerAgent
 from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL, DETECTOR_MODEL
 from qscsop_pipeline.qscsop.mas.mas_engine import MASEngine
 from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
-from qscsop_pipeline.qscsop.pipeline_coordinator import PipelineCoordinator
 from qscsop_pipeline.qscsop.sinks.jsonl_data_sink import JsonlDataSink
 
 # scripts/run_qscsop.py -> risale alla root del progetto, stesso pattern di run_qcep.py.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-INPUT_PATH = PROJECT_ROOT / "data" / "interim" / "dataset_pulito.jsonl"
-OUTPUT_PATH = PROJECT_ROOT / "data" / "interim" / "risultati_dataset.jsonl"
+_INTERIM = PROJECT_ROOT / "data" / "interim"
+
+INPUT_PATH = _INTERIM / "dataset_pulito.jsonl"
+OUTPUT_PATH = _INTERIM / "risultati_dataset.jsonl"
+SYNTHETIC_INPUT_PATH = _INTERIM / "dataset_pulito_synthetic.jsonl"
+SYNTHETIC_OUTPUT_PATH = _INTERIM / "risultati_dataset_synthetic.jsonl"
 
 # Budget di iterazioni del ciclo refactor-validate-review: stesso valore gia' usato nei test e2e
 # (test_mas_engine_e2e.py, test_iterative_refactor_review_loop_e2e.py). Default ragionevole: da'
@@ -39,6 +50,17 @@ MAX_ITERATIONS = 3
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--synthetic",
+        action="store_true",
+        help="Elabora il dataset sintetico prodotto da run_qcep.py --synthetic.",
+    )
+    args = parser.parse_args()
+
+    input_path = SYNTHETIC_INPUT_PATH if args.synthetic else INPUT_PATH
+    output_path = SYNTHETIC_OUTPUT_PATH if args.synthetic else OUTPUT_PATH
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -68,8 +90,8 @@ if __name__ == "__main__":
         reviewer_agent=reviewer_agent,
     )
 
-    dataset_adapter = JsonlDatasetAdapter(filepath=str(INPUT_PATH))
-    data_sink = JsonlDataSink(filepath=str(OUTPUT_PATH))
+    dataset_adapter = JsonlDatasetAdapter(filepath=str(input_path))
+    data_sink = JsonlDataSink(filepath=str(output_path))
 
     pipeline_coordinator = PipelineCoordinator(
         dataset_adapter=dataset_adapter,
@@ -78,4 +100,4 @@ if __name__ == "__main__":
     )
     pipeline_coordinator.run()
 
-    print(f"QSCSOP completato. Output scritto in {OUTPUT_PATH}")
+    print(f"QSCSOP completato. Output scritto in {output_path}")

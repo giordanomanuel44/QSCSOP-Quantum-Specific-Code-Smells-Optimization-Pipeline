@@ -4,6 +4,7 @@ from pathlib import Path
 
 from qscsop_pipeline.qcep.interfaces.i_dataset_parser import IDatasetParser
 from qscsop_pipeline.qcep.parsers.bugs4q_dataset_parser import Bugs4QDatasetParser
+from qscsop_pipeline.qcep.parsers.synthetic_dataset_parser import SyntheticDatasetParser
 from qscsop_pipeline.qcep.parsers.the_smelly_eight_dataset_parser import (
     TheSmellyEightDatasetParser,
 )
@@ -12,6 +13,9 @@ from qscsop_pipeline.qcep.parsers.the_smelly_eight_dataset_parser import (
 # cosi' i path dei dataset restano corretti indipendentemente dalla working directory di lancio.
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
 _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
+# Il dataset sintetico non e' materiale scaricato ma un artefatto generato da
+# scripts/synthetic_dataset/, quindi vive in data/interim/ e non accanto agli altri due.
+_DATA_INTERIM = _PROJECT_ROOT / "data" / "interim"
 
 
 class DatasetParserFactory:
@@ -25,7 +29,12 @@ class DatasetParserFactory:
             return Bugs4QDatasetParser(dataset_path=str(_DATA_RAW / "bugs4q"))
         if normalized_name == "thesmellyeight":
             return TheSmellyEightDatasetParser(dataset_path=str(_DATA_RAW / "thesmellyeight"))
+        if normalized_name == "synthetic":
+            return SyntheticDatasetParser(
+                dataset_path=str(_DATA_INTERIM / "synthetic_ground_truth_f.jsonl")
+            )
 
         raise ValueError(
-            f"Dataset '{dataset_name}' non riconosciuto. Valori validi: bugs4q, thesmellyeight."
+            f"Dataset '{dataset_name}' non riconosciuto. "
+            f"Valori validi: bugs4q, thesmellyeight, synthetic."
         )
