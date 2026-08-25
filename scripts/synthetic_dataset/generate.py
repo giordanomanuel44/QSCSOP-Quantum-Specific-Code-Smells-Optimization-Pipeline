@@ -40,8 +40,6 @@ from scripts.synthetic_dataset.prompts import (
 from scripts.synthetic_dataset.verification import (
     is_near_duplicate,
     matches_batch_theme,
-    verify_declared_idle_qubits,
-    verify_declared_simplification,
     verify_generated_circuit,
 )
 
@@ -107,23 +105,27 @@ def _write_circuit_file(circuit_id: str, source_code: str) -> None:
 
 
 def _sample_with_detector_agent(
-    detector_agent: DetectorAgent, circuit: GeneratedCircuit, circuit_id: str
+    detector_agent: DetectorAgent, circuit: GeneratedCircuit, circuit_id: str, shape: dict
 ) -> bool:
-    """Confronta detected_smells del DetectorAgent con intended_smells; ritorna l'accordo.
+    """Confronta gli smell rilevati dal DetectorAgent con quelli MISURATI; ritorna l'accordo.
 
-    Non scarta nulla in caso di disaccordo: stampa un blocco leggibile per revisione manuale,
-    coerente con la debolezza strutturale della verifica automatica per Long Circuit (vedi
-    verification.py).
+    Il termine di paragone non e' piu' intended_smells (una dichiarazione del generatore, che
+    poteva essere sbagliata quanto il rilevamento) ma measured_smells, calcolato dalla facade
+    con le metriche QSMELL: il confronto ha ora un lato oggettivo, quindi un disaccordo e'
+    attribuibile al Detector e non piu' ambiguo fra i due.
+
+    Non scarta nulla in caso di disaccordo: stampa un blocco leggibile per revisione manuale.
     """
     report = detector_agent.detect_smell(circuit.source_code)
     detected = set(report.get_detected_smells())
-    intended = {smell.value for smell in circuit.intended_smells}
-    agrees = detected == intended
+    measured = set(shape["measured_smells"])
+    agrees = detected == measured
 
     if not agrees:
         print(
             f"[DETECTOR MISMATCH] circuit_id={circuit_id}\n"
-            f"  intended: {sorted(intended)}\n"
+            f"  measured: {sorted(measured)} "
+            f"(l={shape['l']} c={shape['c']} l*c={shape['lc_product']} IdQ={shape['idq']})\n"
             f"  detected: {sorted(detected)}\n"
             f"  detector report_details: {report.get_report_details()}"
         )
@@ -131,44 +133,57 @@ def _sample_with_detector_agent(
     return agrees
 
 
-def _process_circuit(circuit, theme, index, facade, detector_agent, sample_every,
-                      processed_count, accepted_in_batch: list):
+def _process_circuit(
+    circuit,
+    theme,
+    index,
+    facade,
+    detector_agent,
+    sample_every,
+    processed_count,
+    accepted_in_batch: list,
+):
     circuit_id = _circuit_id(theme, index)
     verification = verify_generated_circuit(circuit, facade)
     structural_check_passed = not verification["discarded"]
 
-    # Verifiche semantiche delle dichiarazioni del generatore, entrambe None quando lo smell
-    # corrispondente non e' dichiarato. Eseguite solo se il circuito ha superato la verifica
-    # strutturale: su codice che non compila (o degenere) il verdetto sarebbe un False fuorviante,
-    # attribuito alla dichiarazione invece che al circuito gia' scartato a monte.
-    simplification_verified = (
-        verify_declared_simplification(circuit, facade) if structural_check_passed else None
-    )
-    idle_qubits_verified = (
-        verify_declared_idle_qubits(circuit, facade) if structural_check_passed else None
-    )
+    # La forma MISURATA e' presente solo se il circuito ha superato la verifica strutturale: su
+    # codice che non compila, o che assegna piu' di un circuito, non c'e' nulla da
+    # misurare, e riportare una forma fittizia falserebbe le statistiche del dataset.
+    shape = None
+    if structural_check_passed:
+        shape = {
+            key: verification[key]
+            for key in ("l", "c", "lc_product", "idq", "idq_worst_qubit", "measured_smells")
+        }
 
-    duplicate_of = is_near_duplicate(circuit, accepted_in_batch) if structural_check_passed else None
-    theme_consistent = matches_batch_theme(circuit, theme)
+    duplicate_of = (
+        is_near_duplicate(circuit, accepted_in_batch) if structural_check_passed else None
+    )
+    theme_consistent = matches_batch_theme(shape, theme) if shape is not None else False
 
     detector_agreement = None
     if structural_check_passed and duplicate_of is None:
         _write_circuit_file(circuit_id, circuit.source_code)
         accepted_in_batch.append(circuit)
         if processed_count % sample_every == 0:
-            detector_agreement = _sample_with_detector_agent(detector_agent, circuit, circuit_id)
+            detector_agreement = _sample_with_detector_agent(
+                detector_agent, circuit, circuit_id, shape
+            )
 
     return {
         "circuit_id": circuit_id,
         "source_code": circuit.source_code,
-        "intended_smells": [s.value for s in circuit.intended_smells],
-        "line_by_line_expansion": circuit.line_by_line_expansion,
-        "qubit_operation_analysis": circuit.qubit_operation_analysis,
-        "reasoning": circuit.reasoning,
+        "matrix_sketch": circuit.matrix_sketch,
         "structural_check_passed": structural_check_passed,
-        "simplified_source_code": circuit.simplified_source_code,
-        "simplification_verified": simplification_verified,
-        "idle_qubits_verified": idle_qubits_verified,
+        "compile_error": verification.get("compile_error"),
+        "assigned_circuits": verification.get("assigned_circuits"),
+        "dead_circuit": verification.get("dead_circuit"),
+        # Punto cieco noto di QSMELL, registrato come metadato: un qubit allocato e mai toccato
+        # ha IdQ = 0 e la metrica lo considera pulito (vedi verification.structural_idle_check).
+        "untouched_qubit_indices": verification.get("untouched_qubit_indices"),
+        "measured_shape": shape,
+        "measured_smells": shape["measured_smells"] if shape else None,
         "duplicate_of": duplicate_of,
         "theme_consistent": theme_consistent,
         "detector_agreement": detector_agreement,
@@ -188,7 +203,7 @@ def run_generation(model: str, sample_every: int) -> None:
 
     with GROUND_TRUTH_PATH.open("a", encoding="utf-8") as ground_truth_file:
         for theme in BATCH_THEMES:
-            print(f"[BATCH] {theme.theme} -- richiesti {theme.total_circuits} circuiti")
+            print(f"[BATCH] {theme.theme} -- richiesti {theme.count} circuiti")
             prompt = build_batch_prompt(theme)
             batch: GenerationBatch = generate_batch(llm, prompt, GenerationBatch)
 
@@ -209,23 +224,29 @@ def run_generation(model: str, sample_every: int) -> None:
                 ground_truth_file.write(json.dumps(record, ensure_ascii=False) + "\n")
                 ground_truth_file.flush()
 
-    print(f"Generazione completata. Circuiti in {OUTPUT_CIRCUITS_DIR}, metadati in {GROUND_TRUTH_PATH}")
+    print(
+        f"Generazione completata. Circuiti in {OUTPUT_CIRCUITS_DIR}, metadati in {GROUND_TRUTH_PATH}"
+    )
 
 
 def _print_summary(model: str, sample_every: int) -> None:
-    total_smelly = sum(theme.count_smelly for theme in BATCH_THEMES)
-    total_clean = sum(theme.count_clean for theme in BATCH_THEMES)
+    total = sum(theme.count for theme in BATCH_THEMES)
     print("Riepilogo generazione dataset sintetico")
     print(f"  Modello:              {model}")
     print(f"  Modello DetectorAgent (campionamento): {DETECTOR_MODEL}")
     print(f"  Campionamento:        1 ogni {sample_every} circuiti")
     print(f"  Lotti:                {len(BATCH_THEMES)}")
     for theme in BATCH_THEMES:
+        expected = "long_circuit" if theme.expects_long_circuit else "-"
+        if theme.idle_target.value == "present":
+            expected = f"{expected}, idle_qubits" if expected != "-" else "idle_qubits"
         print(
-            f"    - {theme.theme}: {theme.count_smelly} smelly + {theme.count_clean} puliti "
-            f"(qubit {theme.qubit_range[0]}-{theme.qubit_range[1]}, focus={theme.smell_focus.value})"
+            f"    - {theme.theme}: {theme.count} circuiti "
+            f"(qubit {theme.qubit_range[0]}-{theme.qubit_range[1]}, "
+            f"l {theme.l_range[0]}-{theme.l_range[1]}, c {theme.c_range[0]}-{theme.c_range[1]}, "
+            f"IdQ {theme.idle_target.value}) -> atteso: {expected if expected != '-' else 'pulito'}"
         )
-    print(f"  Totale circuiti:      {total_smelly + total_clean} ({total_smelly} smelly, {total_clean} puliti)")
+    print(f"  Totale circuiti:      {total}")
     print(f"  Output circuiti:      {OUTPUT_CIRCUITS_DIR}")
     print(f"  Output metadati:      {GROUND_TRUTH_PATH}")
 

@@ -581,3 +581,266 @@ qc.h(0)
 
     with pytest.raises(ValueError, match="13 qubit, limite 12"):
         facade.is_qubit_idle(oversized_source, 0)
+
+
+# --- Metriche QSMELL (Chen et al., ICSE 2023) -------------------------------------------------
+#
+# I sorgenti che seguono sono i Listing del paper, trascritti inline invece di essere letti da
+# data/raw/thesmellyeight/: un test unitario non deve dipendere dalla presenza di un dataset su
+# disco. I valori attesi sono gli oracoli PUBBLICATI o derivati dall'implementazione di
+# riferimento github.com/jose/qsmell, non da questa implementazione.
+
+# Listing 3, ricostruito dalla execution matrix stampata nel paper (Sez. V-A1): il paper dichiara
+# per questo circuito l=6, c=5 e quindi (1-0.03512)^30 = 0.34.
+PAPER_LISTING_3 = """
+from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
+
+qreg_q = QuantumRegister(5, 'q')
+creg_c = ClassicalRegister(1, 'c')
+qc = QuantumCircuit(qreg_q, creg_c)
+qc.u(0, 0, 0, qreg_q[0])
+qc.cx(qreg_q[0], qreg_q[1])
+qc.cx(qreg_q[1], qreg_q[2])
+qc.cx(qreg_q[2], qreg_q[3])
+qc.cx(qreg_q[3], qreg_q[4])
+qc.barrier()
+qc.rz(0.1, qreg_q[0])
+qc.rz(0.1, qreg_q[1])
+qc.rz(0.1, qreg_q[2])
+qc.rz(0.1, qreg_q[3])
+qc.rz(0.1, qreg_q[4])
+qc.barrier()
+qc.cx(qreg_q[3], qreg_q[4])
+qc.cx(qreg_q[2], qreg_q[3])
+qc.cx(qreg_q[1], qreg_q[2])
+qc.cx(qreg_q[0], qreg_q[1])
+qc.u(0, 0, 0, qreg_q[0])
+qc.measure(qreg_q[0], creg_c[0])
+"""
+
+# Listing 4: l'esempio con cui il paper ILLUSTRA Long Circuit (identita' HZH = X).
+PAPER_LISTING_4_LONG_CIRCUIT = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(1)
+qc.h(0)
+qc.z(0)
+qc.h(0)
+"""
+
+# Listing 6: l'esempio di Idle Qubits, nelle sue due versioni smelly e fixed.
+PAPER_LISTING_6_SMELLY = """
+from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
+from numpy import pi
+
+qreg_q = QuantumRegister(3, 'q')
+creg_c = ClassicalRegister(3, 'c')
+qc = QuantumCircuit(qreg_q, creg_c)
+qc.h(qreg_q)
+qc.p(pi / 2, qreg_q[0])
+qc.z(qreg_q[0])
+qc.s(qreg_q[0])
+qc.barrier()
+qc.p(pi / 4, qreg_q[1])
+qc.z(qreg_q[1])
+qc.s(qreg_q[1])
+qc.barrier()
+qc.h(qreg_q[2])
+qc.p(pi / 8, qreg_q[2])
+qc.z(qreg_q[2])
+qc.s(qreg_q[2])
+qc.measure_all(add_bits=False)
+"""
+
+PAPER_LISTING_6_FIXED = """
+from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
+from numpy import pi
+
+qreg_q = QuantumRegister(3, 'q')
+creg_c = ClassicalRegister(3, 'c')
+qc = QuantumCircuit(qreg_q, creg_c)
+qc.h(qreg_q[0])
+qc.p(pi / 2, qreg_q[0])
+qc.z(qreg_q[0])
+qc.s(qreg_q[0])
+qc.measure(qreg_q[0], creg_c[0])
+qc.barrier()
+qc.h(qreg_q[1])
+qc.p(pi / 4, qreg_q[1])
+qc.z(qreg_q[1])
+qc.s(qreg_q[1])
+qc.measure(qreg_q[1], creg_c[1])
+qc.barrier()
+qc.h(qreg_q[2])
+qc.p(pi / 8, qreg_q[2])
+qc.z(qreg_q[2])
+qc.s(qreg_q[2])
+qc.measure(qreg_q[2], creg_c[2])
+"""
+
+
+@pytest.mark.unit
+def test_long_circuit_metric_reproduces_the_published_worked_example(
+    facade: QiskitFacade,
+) -> None:
+    # Oracolo esterno: il paper pubblica l=6, c=5 per questo circuito. E' il test piu' importante
+    # della suite sulle metriche, perche' e' l'unico verificabile da terzi senza fidarsi di noi.
+    long_circuit = facade.calculate_smell_metrics(PAPER_LISTING_3)["longCircuit"]
+
+    assert long_circuit["maxOpsPerQubit"] == 6
+    assert long_circuit["maxParallelOps"] == 5
+    assert long_circuit["value"] == 30
+    # Con l'errore di gate del paper (0.03512), lo stesso prodotto da' lo 0.34 stampato in tabella.
+    assert (1 - 0.03512) ** long_circuit["value"] == pytest.approx(0.34, abs=0.005)
+
+
+@pytest.mark.unit
+def test_error_free_probability_is_derived_from_the_declared_gate_error(
+    facade: QiskitFacade,
+) -> None:
+    # La forma esponenziale e' presentazione, non rilevamento: deve essere ricostruibile dai due
+    # valori che il payload espone, senza conoscere costanti interne alla facade.
+    long_circuit = facade.calculate_smell_metrics(PAPER_LISTING_3)["longCircuit"]
+
+    expected = (1 - long_circuit["gateError"]) ** long_circuit["value"]
+    assert long_circuit["errorFreeProbability"] == pytest.approx(expected)
+
+
+@pytest.mark.unit
+def test_long_circuit_metric_ignores_barriers_but_counts_measures(
+    facade: QiskitFacade,
+) -> None:
+    # Due convenzioni dell'implementazione di riferimento: i barrier non sono operazioni (ma
+    # occupano un livello), le measure si'.
+    with_barrier = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+qc.h(1)
+qc.barrier()
+qc.x(0)
+qc.x(1)
+"""
+    with_measure = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+qc.h(1)
+qc.measure_all()
+"""
+
+    assert facade.calculate_smell_metrics(with_barrier)["longCircuit"]["maxOpsPerQubit"] == 2
+    assert facade.calculate_smell_metrics(with_measure)["longCircuit"]["maxOpsPerQubit"] == 2
+
+
+@pytest.mark.unit
+def test_idle_qubits_metric_counts_empty_timestamps_between_two_uses(
+    facade: QiskitFacade,
+) -> None:
+    # q1 riceve una H e poi resta fermo tre colonne, finche' la cx non lo coinvolge di nuovo:
+    # due delle tre sono celle vuote fra due sue operazioni, la terza e' la cx stessa.
+    waiting_qubit = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(1)
+qc.x(0)
+qc.x(0)
+qc.x(0)
+qc.cx(0, 1)
+"""
+
+    idle_qubits = facade.calculate_smell_metrics(waiting_qubit)["idleQubits"]
+
+    assert idle_qubits["value"] == 2
+    assert idle_qubits["worstQubit"] == 1
+
+
+@pytest.mark.unit
+def test_idle_qubits_metric_skips_barrier_columns(facade: QiskitFacade) -> None:
+    # La colonna del barrier non conta ne' come operazione ne' come attesa: i due qubit passano
+    # da h a x senza accumulare alcun gap.
+    barrier_between = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(2)
+qc.h(0)
+qc.h(1)
+qc.barrier()
+qc.x(0)
+qc.x(1)
+"""
+
+    assert facade.calculate_smell_metrics(barrier_between)["idleQubits"]["value"] == 0
+
+
+@pytest.mark.unit
+def test_idle_qubits_metric_ignores_idleness_before_and_after_a_qubit_is_used(
+    facade: QiskitFacade,
+) -> None:
+    # Nella versione fixed del Listing 6 ogni qubit viene misurato appena finite le sue
+    # operazioni: le colonne vuote che lo precedono e quelle che lo seguono non sono attesa fra
+    # DUE usi, quindi la metrica deve annullarsi. E' il caso che valida entrambe le convenzioni
+    # di bordo dell'implementazione di riferimento.
+    assert facade.calculate_smell_metrics(PAPER_LISTING_6_FIXED)["idleQubits"]["value"] == 0
+
+
+@pytest.mark.unit
+def test_smell_metrics_on_the_paper_idle_qubits_listing(facade: QiskitFacade) -> None:
+    # Il Listing 6 smelly deve risultare peggiore della sua versione fixed su ENTRAMBE le
+    # metriche: e' la coppia di riferimento del paper per Idle Qubits.
+    smelly = facade.calculate_smell_metrics(PAPER_LISTING_6_SMELLY)
+    fixed = facade.calculate_smell_metrics(PAPER_LISTING_6_FIXED)
+
+    assert smelly["longCircuit"]["value"] == 18
+    assert smelly["idleQubits"] == {"value": 7, "worstQubit": 0}
+    assert fixed["longCircuit"]["value"] < smelly["longCircuit"]["value"]
+    assert fixed["idleQubits"]["value"] < smelly["idleQubits"]["value"]
+
+
+@pytest.mark.unit
+def test_smell_metrics_on_the_paper_long_circuit_listing(facade: QiskitFacade) -> None:
+    # Incoerenza interna del paper, fissata qui come comportamento atteso e non come difetto:
+    # il Listing 4 e' l'esempio con cui il paper ILLUSTRA Long Circuit, ma il suo prodotto l*c
+    # vale 3, ben sotto il taglio di 20 che la soglia pubblicata (0.50 con error 0.03512)
+    # impone. Con la metrica del paper, quel circuito non e' Long Circuit.
+    long_circuit = facade.calculate_smell_metrics(PAPER_LISTING_4_LONG_CIRCUIT)["longCircuit"]
+
+    assert long_circuit["value"] == 3
+    assert (1 - 0.03512) ** long_circuit["value"] > 0.50
+
+
+@pytest.mark.unit
+def test_calculate_smell_metrics_on_a_circuit_without_operations(facade: QiskitFacade) -> None:
+    empty_circuit = """
+from qiskit import QuantumCircuit
+
+qc = QuantumCircuit(3)
+"""
+
+    metrics = facade.calculate_smell_metrics(empty_circuit)
+
+    assert metrics["longCircuit"]["value"] == 0
+    assert metrics["longCircuit"]["errorFreeProbability"] == 1.0
+    assert metrics["idleQubits"] == {"value": 0, "worstQubit": None}
+
+
+@pytest.mark.unit
+def test_calculate_smell_metrics_does_not_require_binding_free_parameters(
+    facade: QiskitFacade,
+) -> None:
+    # A differenza di is_qubit_idle, qui non si simula alcuno stato: si contano celle. Un
+    # Parameter non legato non deve quindi essere un ostacolo.
+    parametric_source = """
+from qiskit import QuantumCircuit
+from qiskit.circuit import Parameter
+
+theta = Parameter('theta')
+qc = QuantumCircuit(2)
+qc.rx(theta, 0)
+qc.cx(0, 1)
+"""
+
+    assert facade.calculate_smell_metrics(parametric_source)["longCircuit"]["value"] == 4

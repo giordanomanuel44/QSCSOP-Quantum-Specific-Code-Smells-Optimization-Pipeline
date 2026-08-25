@@ -45,6 +45,16 @@ class IQiskitFacade(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def calculate_smell_metrics(self, code: str) -> dict:
+        """Isola code e ritorna le metriche Long Circuit e Idle Qubits secondo QSMELL.
+
+        Forma: {"longCircuit": {"maxOpsPerQubit": int, "maxParallelOps": int, "value": int,
+                                "gateError": float, "errorFreeProbability": float},
+                "idleQubits": {"value": int, "worstQubit": Optional[int]}}.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def calculate_metrics(self, code: str) -> dict:
         """Isola, transpila e ritorna logicalQubits + abstractMetrics + physicalMetrics.
 

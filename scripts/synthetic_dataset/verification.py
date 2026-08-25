@@ -1,24 +1,68 @@
-"""Verifica strutturale post-generazione dei circuiti sintetici.
+"""Verifica post-generazione dei circuiti sintetici.
 
-Isolamento e compilazione dei circuiti passano SEMPRE per la QiskitFacade reale
-(isolate_circuit, compile_circuit) -- zero duplicazione di quella logica, come richiesto.
+Isolamento, compilazione e MISURA dei circuiti passano SEMPRE per la QiskitFacade reale
+(isolate_circuit, compile_circuit, calculate_smell_metrics) -- zero duplicazione di quella
+logica: l'etichetta di un circuito sintetico e' prodotta esattamente dallo stesso codice che
+etichettera' i circuiti in produzione.
+
+CAMBIO DI RUOLO rispetto alla versione precedente. Prima questo modulo doveva verificare le
+DICHIARAZIONI del generatore (intended_smells, simplified_source_code): esistevano
+verify_declared_simplification e verify_declared_idle_qubits proprio per smascherare
+dichiarazioni false, ed era un lavoro strutturalmente ingrato -- per Long Circuit inteso come
+"ridondanza semantica" non esiste nemmeno un controllo deterministico generale. Ora il generatore
+non dichiara piu' nulla e l'etichetta si MISURA: quelle due funzioni sono sparite insieme
+all'oggetto della loro verifica, e qui resta solo cio' che una misura non puo' dire da sola --
+il circuito compila? assegna un solo circuito? non e' un duplicato? ha la forma
+richiesta dal lotto?
 
 Eccezione dichiarata: la regola "solo la facade importa qiskit" (CLAUDE.md, punto 4) e' scoped
 a src/qscsop_pipeline/; questo modulo vive fuori da quel perimetro (tooling di preparazione dati,
 stesso ruolo di scripts/fetch_datasets.py). Statevector viene importato direttamente qui perche'
 la facade non espone un metodo pubblico per costruire lo stato di un circuito isolato (i suoi
 equivalenti privati sono pensati per confrontare DUE circuiti, non per verificare "e' tutto
-|0...0>?" di uno solo). La rimozione delle misure per costruire lo Statevector e' reimplementata
-localmente in poche righe: non e' la logica di isolamento/compilazione che va riusata dalla
-facade, e' un filtro minimo necessario perche' Statevector non ammette istruzioni measure.
+|0...0>?" di uno solo).
 """
+
+import re
 
 from qiskit.quantum_info import Statevector
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
-from qscsop_pipeline.qscsop.mas.dto.quantum_smell_type import QuantumSmellType
-from scripts.synthetic_dataset.prompts import GeneratedCircuit, BatchTheme, SmellFocus
-import re
+from scripts.synthetic_dataset.prompts import (
+    LC_PRODUCT_CUTOFF,
+    BatchTheme,
+    GeneratedCircuit,
+    IdleTarget,
+)
+
+
+def measure_shape(source_code: str, facade: QiskitFacade) -> dict:
+    """Misura la forma QSMELL del circuito e ne deriva l'etichetta.
+
+    E' il cuore del nuovo contratto: l'etichetta di un circuito sintetico non e' piu' quello che
+    il generatore dice di aver scritto, e' quello che la facade misura. Le due soglie applicate
+    qui sono le uniche in gioco: l*c >= LC_PRODUCT_CUTOFF per Long Circuit, IdQ > 0 per Idle
+    Qubits.
+    """
+    metrics = facade.calculate_smell_metrics(source_code)
+    long_circuit, idle_qubits = metrics["longCircuit"], metrics["idleQubits"]
+
+    product = long_circuit["value"]
+    idq = idle_qubits["value"]
+    labels = []
+    if product >= LC_PRODUCT_CUTOFF:
+        labels.append("long_circuit")
+    if idq > 0:
+        labels.append("idle_qubits")
+
+    return {
+        "l": long_circuit["maxOpsPerQubit"],
+        "c": long_circuit["maxParallelOps"],
+        "lc_product": product,
+        "idq": idq,
+        "idq_worst_qubit": idle_qubits["worstQubit"],
+        "measured_smells": labels,
+    }
 
 
 def structural_idle_check(source_code: str, facade: QiskitFacade) -> dict:
@@ -31,15 +75,11 @@ def structural_idle_check(source_code: str, facade: QiskitFacade) -> dict:
     QiskitFacade._strip_measurements), quindi un qubit toccato SOLO da un barrier register-wide
     resterebbe altrimenti mascherato come "attivo" senza esserlo davvero.
 
-    LIMITE STRUTTURALE (verificato empiricamente su idq-smelly.py): questo controllo cattura
-    solo il caso "zero operazioni in assoluto" (es. la chiamata orfana). NON cattura un qubit
-    che riceve operazioni reali il cui effetto NETTO e' pero' nullo -- es. q2 in idq-smelly.py
-    riceve due H consecutivi (H*H = identita') seguiti da soli gate di fase prima di una misura
-    Z: e' idle nel comportamento risultante (stessa definizione usata da DetectorAgent), ma
-    "touched" per questo conteggio, perche' riceve gate reali. Riconoscere la cancellazione
-    netta richiede simulare lo stato, non solo contare le operazioni -- fuori scope per un
-    controllo puramente strutturale. Quel caso e' coperto da verify_declared_idle_qubits, che
-    delega la simulazione dello stato del singolo qubit a QiskitFacade.is_qubit_idle.
+    NON e' piu' un controllo di coerenza (non c'e' piu' una dichiarazione da confrontare), e'
+    METADATO. Registra il punto cieco documentato di QSMELL: un qubit allocato e mai usato ha
+    IdQ = 0, quindi la metrica lo considera pulito. Averlo nel ground truth permette di
+    quantificare quanto spesso il generatore ci cade e di discuterlo in tesi, invece di
+    perderlo.
     """
     circuit = facade.isolate_circuit(source_code)
 
@@ -57,9 +97,18 @@ def structural_idle_check(source_code: str, facade: QiskitFacade) -> dict:
 def structural_dead_circuit_check(source_code: str, facade: QiskitFacade) -> bool:
     """Isola il circuito e verifica se il suo stato finale coincide con |0...0>.
 
-    Un circuito interamente inerte (es. solo gate condizionati mai attivati) e' il caso
-    degenere vietato dal vincolo negativo 3d -- va scartato, non e' rappresentativo di uno smell
-    genuino (che presuppone computazione reale con uno spreco incorporato, non "tutto morto").
+    NON E' PIU' UN MOTIVO DI SCARTO, e' un metadato -- cambiato dopo un falso positivo su un
+    circuito reale. data/raw/bugs4q/StackExchange_16_fix.py e' uno dei 9 circuiti affidabili del
+    corpus (IdQ = 1 misurato, forma perfettamente valida), ma i suoi tre ccx partono tutti da
+    controlli a |0> e non scattano mai: lo stato finale e' |00000> e questo controllo lo
+    bocciava.
+
+    Lo scarto aveva senso finche' gli smell erano definiti semanticamente ("qubit il cui effetto
+    netto e' nullo"): su un circuito interamente inerte quella definizione degenerava. Le
+    metriche QSMELL guardano la FORMA della execution matrix e non lo stato prodotto, quindi un
+    circuito inerte ha metriche altrettanto valide di uno che computa. Resta comunque utile
+    saperlo, per non costruire un dataset fatto di gusci vuoti: il vincolo e' scritto nel prompt
+    e l'esito finisce nel ground truth, ma non decide piu' l'ammissione.
     """
     circuit = facade.isolate_circuit(source_code)
 
@@ -70,12 +119,12 @@ def structural_dead_circuit_check(source_code: str, facade: QiskitFacade) -> boo
         pure_circuit.append(instruction.operation, instruction.qubits, instruction.clbits)
 
     if pure_circuit.parameters:
-        # Il circuito puo' contenere Parameter mai assegnati (visto nel few-shot "chiamata
-        # orfana" di prompts.py, dove theta1 resta libero): Statevector non accetta operazioni
-        # con parametri liberi. Il verdetto di degenerazione non dipende dal valore specifico
-        # del parametro (a meno di coincidenze patologiche), quindi si lega un valore generico
-        # e non nullo -- 0 andrebbe evitato perche' coinciderebbe con l'identita' per molti gate
-        # parametrici (es. rx(0) = I), falsando il controllo.
+        # Il circuito puo' contenere Parameter mai assegnati (il caso reale si vede nel
+        # controesempio B di prompts.py, dove theta1 resta libero): Statevector non accetta
+        # operazioni con parametri liberi. Il verdetto di degenerazione non dipende dal valore
+        # specifico del parametro (a meno di coincidenze patologiche), quindi si lega un valore
+        # generico e non nullo -- 0 andrebbe evitato perche' coinciderebbe con l'identita' per
+        # molti gate parametrici (es. rx(0) = I), falsando il controllo.
         generic_value = 0.4321
         pure_circuit = pure_circuit.assign_parameters(
             {param: generic_value for param in pure_circuit.parameters}
@@ -86,113 +135,76 @@ def structural_dead_circuit_check(source_code: str, facade: QiskitFacade) -> boo
     return state.equiv(zero_state)
 
 
+def _assigned_circuit_count(source_code: str) -> int:
+    """Quanti QuantumCircuit il sorgente lascia nel namespace (deve essere esattamente 1).
+
+    Riproduce sui circuiti sintetici il criterio 3 di
+    scripts/diagnostics/corpus_reliability_report.py, che ha scartato 6 circuiti reali su 91:
+    isolate_circuit misura l'ULTIMO circuito assegnato, quindi un sorgente che ne assegna due
+    fa misurare il pezzo sbagliato. Il vincolo e' scritto nel prompt; qui si verifica.
+    """
+    from qiskit import QuantumCircuit  # import locale: vedi eccezione dichiarata nel docstring
+
+    namespace: dict = {}
+    exec(source_code, namespace)  # noqa: S102 - stessa sandbox di facade.isolate_circuit
+    return sum(1 for value in namespace.values() if isinstance(value, QuantumCircuit))
+
+
 def verify_generated_circuit(circuit: GeneratedCircuit, facade: QiskitFacade) -> dict:
-    """Orchestra compile_circuit -> structural_dead_circuit_check -> structural_idle_check.
+    """Orchestra compile -> circuito unico -> non degenere -> misura della forma.
 
     Diagnostica pura: non solleva eccezioni per circuiti che falliscono la verifica, ritorna un
     dict con l'esito. Il chiamante decide cosa fare (scrivere su disco, scartare, segnalare).
-
-    NOTA IMPORTANTE: la verifica automatica qui e' strutturalmente PIU' DEBOLE per Long Circuit
-    che per Idle Qubits. Non esiste un controllo deterministico generale per "ridondanza
-    semantica" -- l'identita' SWAP-via-coniugazione-H (Example 3 in prompts.py) lo dimostra:
-    riconoscerla richiede algebra di gruppo, non e' enumerabile a priori per ogni circuito
-    possibile. Per i circuiti etichettati long_circuit, questa funzione puo' solo confermare che
-    il circuito compila e non e' degenere: la verifica di merito passa da
-    verify_declared_simplification (che confronta l'originale con la versione piu' corta fornita
-    dal generatore) e dal campionamento con DetectorAgent (vedi generate.py).
     """
     compiles, compile_error = facade.compile_circuit(circuit.source_code)
     if not compiles:
         return {"compiles": False, "compile_error": compile_error, "discarded": True}
 
-    if structural_dead_circuit_check(circuit.source_code, facade):
-        return {"compiles": True, "dead_circuit": True, "discarded": True}
+    try:
+        assigned = _assigned_circuit_count(circuit.source_code)
+    except Exception:  # noqa: BLE001 - gia' compilato sopra, ma il conteggio resta best-effort
+        assigned = 1
+    if assigned != 1:
+        return {"compiles": True, "assigned_circuits": assigned, "discarded": True}
 
-    idle_result = structural_idle_check(circuit.source_code, facade)
-    idle_declared = QuantumSmellType.IDLE_QUBITS in circuit.intended_smells
-    idle_declaration_consistent = idle_declared == bool(idle_result["idle_qubit_indices"])
-
+    shape = measure_shape(circuit.source_code, facade)
     return {
         "compiles": True,
-        "dead_circuit": False,
+        "assigned_circuits": 1,
+        # Metadato, non criterio di scarto: vedi structural_dead_circuit_check.
+        "dead_circuit": structural_dead_circuit_check(circuit.source_code, facade),
         "discarded": False,
-        "idle_qubit_indices": idle_result["idle_qubit_indices"],
-        "idle_declaration_consistent": idle_declaration_consistent,
+        "untouched_qubit_indices": structural_idle_check(circuit.source_code, facade)[
+            "idle_qubit_indices"
+        ],
+        **shape,
     }
 
-def verify_declared_simplification(circuit: GeneratedCircuit, facade: QiskitFacade) -> bool | None:
-    """Verifica che il circuito semplificato dichiarato sia davvero equivalente all'originale.
 
-    Colma il limite documentato in verify_generated_circuit: la ridondanza semantica non e'
-    enumerabile a priori, ma se il generatore FORNISCE la versione piu' corta che sostiene esistere
-    (campo simplified_source_code), l'equivalenza fra le due diventa verificabile a macchina —
-    riusando lo stesso QiskitFacade.check_equivalence con cui ValidationService valida i
-    refactoring nel sistema reale, non un confronto reimplementato qui.
+def matches_batch_theme(shape: dict, theme: BatchTheme) -> bool:
+    """Verifica che la forma MISURATA rientri negli intervalli richiesti dal lotto.
 
-    Ritorna None se il circuito non dichiara long_circuit (niente da verificare), False se lo
-    dichiara ma il campo e' assente/vuoto o i due circuiti non sono equivalenti, True se
-    l'equivalenza e' confermata. Diagnostica pura come il resto del modulo: qualunque eccezione di
-    isolamento o confronto (codice non compilabile, feedback classico, circuito oltre i limiti
-    dimensionali della facade) vale come verifica NON superata, non come errore da propagare.
+    Sostituisce il vecchio confronto fra intended_smells e smell_focus: quello controllava che
+    il generatore avesse dichiarato l'etichetta giusta, cioe' verificava una sua affermazione.
+    Questo controlla che il circuito ABBIA la forma richiesta -- un fatto, misurato.
     """
-    if QuantumSmellType.LONG_CIRCUIT not in circuit.intended_smells:
-        return None
-
-    simplified_code = circuit.simplified_source_code
-    if not simplified_code or not simplified_code.strip():
+    if shape is None:
         return False
 
-    try:
-        return facade.check_equivalence(circuit.source_code, simplified_code)
-    except Exception:
+    l_min, l_max = theme.l_range
+    c_min, c_max = theme.c_range
+    if not (l_min <= shape["l"] <= l_max and c_min <= shape["c"] <= c_max):
         return False
 
-
-def verify_declared_idle_qubits(circuit: GeneratedCircuit, facade: QiskitFacade) -> bool | None:
-    """Verifica a macchina che almeno un qubit sia davvero idle, non solo dichiarato tale.
-
-    Complementare a structural_idle_check, di cui copre esattamente il limite documentato: qui il
-    verdetto passa da QiskitFacade.is_qubit_idle, che simula lo stato del singolo qubit e cattura
-    quindi anche il caso "operazioni reali con effetto netto nullo" (due H consecutivi), quello su
-    cui il generatore ha sbagliato piu' spesso in pratica.
-
-    Ritorna None se il circuito non dichiara idle_qubits, True se almeno un qubit risulta
-    verificato come idle, False altrimenti. Stessa diagnostica pura: un'eccezione della facade vale
-    come verifica non superata.
-    """
-    if QuantumSmellType.IDLE_QUBITS not in circuit.intended_smells:
-        return None
-
-    try:
-        num_qubits = facade.isolate_circuit(circuit.source_code).num_qubits
-        return any(
-            facade.is_qubit_idle(circuit.source_code, index) for index in range(num_qubits)
-        )
-    except Exception:
-        return False
+    if theme.idle_target == IdleTarget.PRESENT:
+        return shape["idq"] > 0
+    return shape["idq"] == 0
 
 
-def matches_batch_theme(circuit: GeneratedCircuit, theme: BatchTheme) -> bool:
-    """Verifica che intended_smells rispetti il focus dichiarato del lotto.
-
-    Cattura esattamente il problema visto: lotti IDLE_QUBITS_ONLY che generavano
-    circuiti puliti o addirittura long_circuit, invece del tema richiesto.
-    """
-    declared = {s.value for s in circuit.intended_smells}
-    focus = theme.smell_focus
-
-    if focus == SmellFocus.LONG_CIRCUIT_ONLY:
-        return declared == {"long_circuit"}
-    if focus == SmellFocus.IDLE_QUBITS_ONLY:
-        return declared == {"idle_qubits"}
-    if focus == SmellFocus.BOTH:
-        return declared == {"long_circuit", "idle_qubits"}
-    if focus == SmellFocus.NONE:
-        return declared == set()
-    return True
-
-def is_near_duplicate(circuit: GeneratedCircuit, already_accepted: list[GeneratedCircuit]) -> str | None:
-    """Confronta il circuito con quelli già accettati nello stesso lotto.
+def is_near_duplicate(
+    circuit: GeneratedCircuit, already_accepted: list[GeneratedCircuit]
+) -> str | None:
+    """Confronta il circuito con quelli gia' accettati nello stesso lotto.
 
     Due livelli: (a) codice sorgente identico dopo aver rimosso spazi/a-capo superflui
     (cattura il caso visto nel lotto both_smells, dove 6 record erano byte-identici a
@@ -201,16 +213,29 @@ def is_near_duplicate(circuit: GeneratedCircuit, already_accepted: list[Generate
     Ritorna l'ID del circuito duplicato se trovato, altrimenti None.
     """
     normalized_new = " ".join(circuit.source_code.split())
+    gates_new = _gate_sequence(circuit.source_code)
 
     for other in already_accepted:
-        normalized_other = " ".join(other.source_code.split())
-        if normalized_new == normalized_other:
+        if normalized_new == " ".join(other.source_code.split()):
             return "identical_source"
 
-        # Confronto strutturale: sequenza dei nomi dei gate, ignorando gli indici
-        gates_new = re.findall(r"qc\.(\w+)\(", circuit.source_code)
-        gates_other = re.findall(r"qc\.(\w+)\(", other.source_code)
-        if gates_new == gates_other and len(gates_new) > 2:
+        if gates_new == _gate_sequence(other.source_code) and len(gates_new) > 2:
             return "same_gate_sequence"
 
     return None
+
+
+# Il nome della variabile del circuito non e' vincolato dal prompt (i circuiti reali usano qc,
+# qc_bad, circuit, ...), quindi il pattern cattura qualunque ricevente: ancorarlo a "qc." come
+# faceva la versione precedente rendeva il confronto cieco su tutti gli altri nomi.
+_GATE_CALL_PATTERN = re.compile(r"\b\w+\.(\w+)\(")
+
+# Metodi che non sono gate: comparirebbero nella sequenza senza dire nulla sulla struttura.
+_NON_GATE_METHODS = frozenset({"draw", "copy", "bind_parameters", "assign_parameters", "append"})
+
+
+def _gate_sequence(source_code: str) -> list[str]:
+    """Sequenza dei nomi di metodo invocati sul circuito, ignorando gli indici dei qubit."""
+    return [
+        name for name in _GATE_CALL_PATTERN.findall(source_code) if name not in _NON_GATE_METHODS
+    ]

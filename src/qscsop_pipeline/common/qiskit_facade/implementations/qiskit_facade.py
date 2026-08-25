@@ -53,6 +53,17 @@ class QiskitFacade(IQiskitFacade):
     # molti gate parametrici (rx(0) = I), facendo risultare idle un qubit ruotato davvero.
     _GENERIC_PARAMETER_VALUE = 0.4321
 
+    # Errore di gate usato SOLO per la forma esponenziale (1 - error)^(l*c) con cui il paper
+    # QSMELL presenta la metrica Long Circuit nelle sue tabelle. Non entra nel valore della
+    # metrica: l'implementazione di riferimento (qsmell/smell/LC.py) ritorna il prodotto l*c
+    # grezzo, senza alcuna costante hardware. Il valore adottato e' l'errore massimo di
+    # GenericBackendV2(num_qubits=5, seed=42), cioe' lo stesso target su cui transpila questa
+    # facade; e' congelato come costante e NON riletto dal backend per-circuito, perche'
+    # GenericBackendV2 lo estrae pseudo-casualmente e varia con la dimensione richiesta
+    # (0.00416 a 3 qubit, 0.00496 a 10): rileggerlo renderebbe non confrontabili fra loro le
+    # metriche di circuiti di taglia diversa nello stesso dataset.
+    _MAX_GATE_ERROR = 0.00485
+
     def isolate_circuit(self, source_code: str) -> QuantumCircuit:
         """Esegue source_code in sandbox e ritorna l'ultimo QuantumCircuit assegnato."""
         namespace: dict = {}
@@ -385,6 +396,121 @@ class QiskitFacade(IQiskitFacade):
             "abstractMetrics": abstract_metrics,
             "physicalMetrics": physical_metrics,
         }
+
+    def calculate_smell_metrics(self, code: str) -> dict:
+        """Isola il codice e ritorna le metriche Long Circuit e Idle Qubits secondo QSMELL.
+
+        Metriche definite da Chen et al., "The Smelly Eight: An Empirical Study on the
+        Prevalence of Code Smells in Quantum Computing", ICSE 2023
+        (DOI 10.1109/ICSE48619.2023.00041), e allineate all'implementazione di riferimento
+        github.com/jose/qsmell (moduli qsmell/smell/LC.py e qsmell/smell/IdQ.py).
+
+        Il payload ha forma:
+        {"longCircuit": {"maxOpsPerQubit": int, "maxParallelOps": int, "value": int,
+                         "gateError": float, "errorFreeProbability": float},
+         "idleQubits": {"value": int, "worstQubit": Optional[int]}}.
+
+        "value" di longCircuit e' il prodotto l*c ritornato dallo strumento di riferimento;
+        "errorFreeProbability" e' la forma (1 - error)^(l*c) con cui il paper presenta la stessa
+        metrica nelle tabelle. Le SOGLIE non compaiono qui: questa e' la misura, il confronto con
+        una soglia e' politica di rilevamento e vive nel livello che decide (stessa separazione
+        gia' in atto fra calculate_metrics e ValidationService._is_improvement).
+        """
+        circuit = self.isolate_circuit(code)
+        matrix = self._execution_matrix(circuit)
+
+        max_ops_per_qubit = max((self._count_operations(row) for row in matrix), default=0)
+        max_parallel_ops = max(
+            (self._count_operations(column) for column in zip(*matrix)), default=0
+        )
+        product = max_ops_per_qubit * max_parallel_ops
+        idle_value, worst_qubit = self._idle_qubits_metric(matrix)
+
+        return {
+            "longCircuit": {
+                "maxOpsPerQubit": max_ops_per_qubit,
+                "maxParallelOps": max_parallel_ops,
+                "value": product,
+                "gateError": self._MAX_GATE_ERROR,
+                "errorFreeProbability": (1 - self._MAX_GATE_ERROR) ** product,
+            },
+            "idleQubits": {"value": idle_value, "worstQubit": worst_qubit},
+        }
+
+    @staticmethod
+    def _execution_matrix(circuit: QuantumCircuit) -> list[list[str]]:
+        """Costruisce la execution matrix di QSMELL: righe = qubit, colonne = timestamp.
+
+        Porta l'algoritmo di leftqc2matrix (qsmell/utils/quantum_circuit_to_matrix.py): ogni
+        istruzione viene collocata al primo livello libero comune a TUTTI i bit che tocca, e
+        quei bit avanzano insieme a quel livello. I bit classici NON compaiono fra le righe
+        (entrambe le metriche li scartano) ma partecipano al calcolo dei livelli, altrimenti due
+        measure che condividono un registro classico finirebbero erroneamente in parallelo.
+
+        I barrier vengono INSERITI in matrice, non filtrati qui: pur non contando come operazioni
+        nelle metriche, occupano un livello e agiscono da punto di sincronizzazione, impedendo
+        alle istruzioni che li seguono di risalire in colonne precedenti. Rimuoverli in questa
+        fase cambierebbe il packing e quindi i valori di entrambe le metriche.
+
+        Le celle contengono il solo nome dell'operazione: le metriche interrogano il contenuto
+        unicamente per "cella vuota" e "inizia per barrier", quindi la firma dei parametri che
+        lo strumento di riferimento aggiunge al nome sarebbe informazione morta.
+        """
+        bit_level = dict.fromkeys(list(circuit.qubits) + list(circuit.clbits), 0)
+        placements: list[tuple[int, int, str]] = []
+        depth = 0
+
+        for instruction in circuit.data:
+            involved = list(instruction.qubits) + list(instruction.clbits)
+            level = max(bit_level[bit] for bit in involved) + 1
+            for bit in involved:
+                bit_level[bit] = level
+            depth = max(depth, level)
+            for qubit in instruction.qubits:
+                placements.append(
+                    (level, circuit.find_bit(qubit).index, instruction.operation.name)
+                )
+
+        matrix = [["" for _ in range(depth)] for _ in range(circuit.num_qubits)]
+        for level, qubit_index, operation_name in placements:
+            matrix[qubit_index][level - 1] = operation_name
+        return matrix
+
+    @staticmethod
+    def _count_operations(cells) -> int:
+        """Conta le celle occupate da un'operazione reale: vuote e barrier non contano."""
+        return sum(1 for cell in cells if cell and not cell.lower().startswith("barrier"))
+
+    @staticmethod
+    def _idle_qubits_metric(matrix: list[list[str]]) -> tuple[int, Optional[int]]:
+        """Massimo numero di timestamp vuoti fra due operazioni consecutive dello stesso qubit.
+
+        Porta la logica di qsmell/smell/IdQ.py, comprese le sue due convenzioni non ovvie: le
+        colonne di barrier sono saltate del tutto (non contano ne' come operazione ne' come
+        attesa), e la coda di celle vuote DOPO l'ultima operazione di un qubit non viene
+        conteggiata — un qubit che smette di essere usato non accumula attesa fino a fine
+        circuito. Ritorna anche l'indice del qubit che realizza il massimo, per permettere al
+        RefactorerAgent di sapere su quale qubit intervenire (None se nessuno attende).
+        """
+        worst_value = 0
+        worst_qubit: Optional[int] = None
+
+        for qubit_index, row in enumerate(matrix):
+            gap = -1  # -1 = la prima operazione del qubit non e' ancora stata incontrata
+            for cell in row:
+                if cell.lower().startswith("barrier"):
+                    continue
+                if not cell:
+                    if gap != -1:
+                        gap += 1
+                elif gap == -1:
+                    gap = 0
+                else:
+                    if gap > worst_value:
+                        worst_value, worst_qubit = gap, qubit_index
+                    gap = 0
+
+        return worst_value, worst_qubit
 
     @staticmethod
     @contextmanager
