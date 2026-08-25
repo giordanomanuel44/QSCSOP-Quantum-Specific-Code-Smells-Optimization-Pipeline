@@ -24,8 +24,8 @@ import pytest
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
 from scripts.synthetic_dataset import prompts
+from qscsop_pipeline.qscsop.mas.detection_thresholds import LC_PRODUCT_CUTOFF
 from scripts.synthetic_dataset.prompts import (
-    LC_PRODUCT_CUTOFF,
     BATCH_THEMES,
     IdleTarget,
     build_batch_prompt,

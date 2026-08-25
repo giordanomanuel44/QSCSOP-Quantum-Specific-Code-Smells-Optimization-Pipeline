@@ -28,8 +28,8 @@ import re
 from qiskit.quantum_info import Statevector
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
+from qscsop_pipeline.qscsop.mas.detection_thresholds import has_idle_qubits, is_long_circuit
 from scripts.synthetic_dataset.prompts import (
-    LC_PRODUCT_CUTOFF,
     BatchTheme,
     GeneratedCircuit,
     IdleTarget,
@@ -41,8 +41,8 @@ def measure_shape(source_code: str, facade: QiskitFacade) -> dict:
 
     E' il cuore del nuovo contratto: l'etichetta di un circuito sintetico non e' piu' quello che
     il generatore dice di aver scritto, e' quello che la facade misura. Le due soglie applicate
-    qui sono le uniche in gioco: l*c >= LC_PRODUCT_CUTOFF per Long Circuit, IdQ > 0 per Idle
-    Qubits.
+    qui sono le uniche in gioco e arrivano da mas/detection_thresholds.py: sono le stesse che
+    usera' il rilevamento in produzione, quindi il ground truth non puo' divergere da esso.
     """
     metrics = facade.calculate_smell_metrics(source_code)
     long_circuit, idle_qubits = metrics["longCircuit"], metrics["idleQubits"]
@@ -50,9 +50,9 @@ def measure_shape(source_code: str, facade: QiskitFacade) -> dict:
     product = long_circuit["value"]
     idq = idle_qubits["value"]
     labels = []
-    if product >= LC_PRODUCT_CUTOFF:
+    if is_long_circuit(product):
         labels.append("long_circuit")
-    if idq > 0:
+    if has_idle_qubits(idq):
         labels.append("idle_qubits")
 
     return {
@@ -197,8 +197,8 @@ def matches_batch_theme(shape: dict, theme: BatchTheme) -> bool:
         return False
 
     if theme.idle_target == IdleTarget.PRESENT:
-        return shape["idq"] > 0
-    return shape["idq"] == 0
+        return has_idle_qubits(shape["idq"])
+    return not has_idle_qubits(shape["idq"])
 
 
 def is_near_duplicate(

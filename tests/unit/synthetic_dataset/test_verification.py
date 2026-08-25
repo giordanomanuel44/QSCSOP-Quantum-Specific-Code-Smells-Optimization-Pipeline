@@ -16,8 +16,8 @@ from unittest.mock import Mock
 import pytest
 
 from qscsop_pipeline.common.qiskit_facade.interfaces.i_qiskit_facade import IQiskitFacade
+from qscsop_pipeline.qscsop.mas.detection_thresholds import LC_PRODUCT_CUTOFF
 from scripts.synthetic_dataset.prompts import (
-    LC_PRODUCT_CUTOFF,
     BatchTheme,
     GeneratedCircuit,
     IdleTarget,

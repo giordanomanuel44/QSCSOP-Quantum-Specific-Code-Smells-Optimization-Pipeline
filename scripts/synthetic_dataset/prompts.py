@@ -45,10 +45,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-# Soglia di Long Circuit, unica per tutto il progetto: la soglia pubblicata da QSMELL (0.50
-# sulla forma esponenziale, con l'errore di gate della IBM Kolkata di agosto 2022) equivale
-# esattamente a l*c >= 20, ed e' questa la forma machine-independent del criterio.
-LC_PRODUCT_CUTOFF = 20
+from qscsop_pipeline.qscsop.mas.detection_thresholds import LC_PRODUCT_CUTOFF, is_long_circuit
 
 
 class GeneratedCircuit(BaseModel):
@@ -92,7 +89,7 @@ those bits all advance to that level (as-soon-as-possible, left-justified packin
 classical register do NOT end up in the same column.
 3. Barriers OCCUPY a level and synchronise, but do NOT count as operations."""
 
-_SMELL_DEFINITIONS = """SMELL DEFINITIONS (measured on the execution matrix, not judged by eye)
+_SMELL_DEFINITIONS = f"""SMELL DEFINITIONS (measured on the execution matrix, not judged by eye)
 
 1. LONG CIRCUIT (LC)
 Long Circuit is about accumulated hardware error, not about redundancy. A circuit is Long when \
@@ -103,7 +100,7 @@ cancelling gates is not Long if it is small.
 
   l = the largest number of operations on a single ROW (one qubit), barriers excluded
   c = the largest number of operations in a single COLUMN (in parallel), barriers excluded
-  LC metric = l * c, and the circuit is LONG CIRCUIT when l * c >= 20
+  LC metric = l * c, and the circuit is LONG CIRCUIT when l * c >= {LC_PRODUCT_CUTOFF}
 
 2. IDLE QUBITS (IdQ)
 Idle Qubits is about decoherence while waiting. A qubit is idle when it is used, then left \
@@ -477,7 +474,7 @@ class BatchTheme:
     @property
     def expects_long_circuit(self) -> bool:
         """True se ogni prodotto l*c ammesso dagli intervalli raggiunge la soglia LC."""
-        return self.l_range[0] * self.c_range[0] >= LC_PRODUCT_CUTOFF
+        return is_long_circuit(self.l_range[0] * self.c_range[0])
 
     @property
     def targets_clean_circuits(self) -> bool:
