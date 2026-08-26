@@ -39,7 +39,6 @@ from scripts.synthetic_dataset.prompts import (
 )
 from scripts.synthetic_dataset.verification import (
     is_near_duplicate,
-    matches_batch_theme,
     verify_generated_circuit,
 )
 
@@ -160,7 +159,6 @@ def _process_circuit(
     duplicate_of = (
         is_near_duplicate(circuit, accepted_in_batch) if structural_check_passed else None
     )
-    theme_consistent = matches_batch_theme(shape, theme) if shape is not None else False
 
     detector_agreement = None
     if structural_check_passed and duplicate_of is None:
@@ -174,7 +172,6 @@ def _process_circuit(
     return {
         "circuit_id": circuit_id,
         "source_code": circuit.source_code,
-        "matrix_sketch": circuit.matrix_sketch,
         "structural_check_passed": structural_check_passed,
         "compile_error": verification.get("compile_error"),
         "assigned_circuits": verification.get("assigned_circuits"),
@@ -185,7 +182,6 @@ def _process_circuit(
         "measured_shape": shape,
         "measured_smells": shape["measured_smells"] if shape else None,
         "duplicate_of": duplicate_of,
-        "theme_consistent": theme_consistent,
         "detector_agreement": detector_agreement,
         "generation_batch": theme.theme,
     }
@@ -236,15 +232,12 @@ def _print_summary(model: str, sample_every: int) -> None:
     print(f"  Modello DetectorAgent (campionamento): {DETECTOR_MODEL}")
     print(f"  Campionamento:        1 ogni {sample_every} circuiti")
     print(f"  Lotti:                {len(BATCH_THEMES)}")
+    # Nessuna colonna "atteso": il lotto non prevede piu' un'etichetta. Descrive una struttura
+    # di codice e l'etichetta esce dalla misura a valle, quindi qui c'e' solo cosa si chiede.
     for theme in BATCH_THEMES:
-        expected = "long_circuit" if theme.expects_long_circuit else "-"
-        if theme.idle_target.value == "present":
-            expected = f"{expected}, idle_qubits" if expected != "-" else "idle_qubits"
         print(
             f"    - {theme.theme}: {theme.count} circuiti "
-            f"(qubit {theme.qubit_range[0]}-{theme.qubit_range[1]}, "
-            f"l {theme.l_range[0]}-{theme.l_range[1]}, c {theme.c_range[0]}-{theme.c_range[1]}, "
-            f"IdQ {theme.idle_target.value}) -> atteso: {expected if expected != '-' else 'pulito'}"
+            f"(qubit {theme.qubit_range[0]}-{theme.qubit_range[1]})"
         )
     print(f"  Totale circuiti:      {total}")
     print(f"  Output circuiti:      {OUTPUT_CIRCUITS_DIR}")

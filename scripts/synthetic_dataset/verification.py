@@ -12,8 +12,12 @@ dichiarazioni false, ed era un lavoro strutturalmente ingrato -- per Long Circui
 "ridondanza semantica" non esiste nemmeno un controllo deterministico generale. Ora il generatore
 non dichiara piu' nulla e l'etichetta si MISURA: quelle due funzioni sono sparite insieme
 all'oggetto della loro verifica, e qui resta solo cio' che una misura non puo' dire da sola --
-il circuito compila? assegna un solo circuito? non e' un duplicato? ha la forma
-richiesta dal lotto?
+il circuito compila? assegna un solo circuito? non e' un duplicato?
+
+E' sparita anche matches_batch_theme, che confrontava la forma misurata con gli intervalli
+(l, c, IdQ) richiesti dal lotto. Non c'e' piu' niente da confrontare: i lotti ora descrivono una
+struttura di codice e non un bersaglio metrico (vedi il docstring di prompts.py e la diagnosi
+sui 50 circuiti compilanti su 50 che quel confronto bocciava).
 
 Eccezione dichiarata: la regola "solo la facade importa qiskit" (CLAUDE.md, punto 4) e' scoped
 a src/qscsop_pipeline/; questo modulo vive fuori da quel perimetro (tooling di preparazione dati,
@@ -29,11 +33,7 @@ from qiskit.quantum_info import Statevector
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
 from qscsop_pipeline.qscsop.mas.detection_thresholds import has_idle_qubits, is_long_circuit
-from scripts.synthetic_dataset.prompts import (
-    BatchTheme,
-    GeneratedCircuit,
-    IdleTarget,
-)
+from scripts.synthetic_dataset.prompts import GeneratedCircuit
 
 
 def measure_shape(source_code: str, facade: QiskitFacade) -> dict:
@@ -179,26 +179,6 @@ def verify_generated_circuit(circuit: GeneratedCircuit, facade: QiskitFacade) ->
         ],
         **shape,
     }
-
-
-def matches_batch_theme(shape: dict, theme: BatchTheme) -> bool:
-    """Verifica che la forma MISURATA rientri negli intervalli richiesti dal lotto.
-
-    Sostituisce il vecchio confronto fra intended_smells e smell_focus: quello controllava che
-    il generatore avesse dichiarato l'etichetta giusta, cioe' verificava una sua affermazione.
-    Questo controlla che il circuito ABBIA la forma richiesta -- un fatto, misurato.
-    """
-    if shape is None:
-        return False
-
-    l_min, l_max = theme.l_range
-    c_min, c_max = theme.c_range
-    if not (l_min <= shape["l"] <= l_max and c_min <= shape["c"] <= c_max):
-        return False
-
-    if theme.idle_target == IdleTarget.PRESENT:
-        return has_idle_qubits(shape["idq"])
-    return not has_idle_qubits(shape["idq"])
 
 
 def is_near_duplicate(

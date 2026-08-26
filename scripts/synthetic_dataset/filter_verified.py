@@ -4,14 +4,14 @@ I criteri sono cambiati insieme al contratto di generazione: prima si scartava u
 la DICHIARAZIONE del generatore non reggeva alla verifica (simplification_verified,
 idle_qubits_verified). Ora il generatore non dichiara nulla e l'etichetta e' misurata dalla
 facade, quindi non c'e' piu' niente da smentire: restano solo i motivi per cui un circuito non
-e' utilizzabile come dato (non compila, e' degenere, e' un duplicato) piu' la coerenza fra la
-forma misurata e quella che il lotto aveva chiesto.
+e' utilizzabile come dato: non compila, e' degenere, e' un duplicato.
 
-NOTA sui non-consistenti: un circuito con theme_consistent = False non e' sbagliato, e' solo
-finito in una forma diversa da quella richiesta -- resta un circuito valido con un'etichetta
-corretta. Viene comunque scartato qui perche' il valore del dataset sta nella COPERTURA
-bilanciata delle forme, e tenere i fuori-bersaglio la sbilancerebbe verso le forme facili da
-generare. Restano nel file di partenza per essere contati e discussi.
+E' CADUTO anche il criterio "forma fuori bersaglio" (theme_consistent). I lotti non chiedono
+piu' una forma metrica -- chiedono una struttura di codice, e l'etichetta esce dalla misura --
+quindi non esiste piu' un bersaglio da mancare. Nel primo giro di generazione quel criterio da
+solo scartava 50 circuiti compilanti su 50 fuori dal lotto pulito: erano circuiti validi con
+etichetta corretta, buttati perche' misuravano numeri diversi da quelli ordinati. Ora si tengono
+e la copertura si legge a posteriori dalla distribuzione delle etichette misurate.
 """
 
 import json
@@ -28,8 +28,8 @@ def discard_reason(record: dict) -> str | None:
     """Perche' il record e' stato scartato, o None se e' utilizzabile.
 
     is_trustworthy risponde si'/no; qui si dice QUALE controllo ha ceduto. La differenza conta
-    al controllo a vista: un lotto che rende male per "forma fuori bersaglio" e' un problema di
-    prompt o di intervallo richiesto, uno che rende male per "non compila" e' un problema di
+    al controllo a vista: un lotto che rende male per "duplicato" e' un problema di diversita' --
+    prompt o temperatura -- mentre uno che rende male per "non compila" e' un problema di
     modello, e i due si correggono in modo opposto.
     """
     if not record.get("structural_check_passed"):
@@ -42,8 +42,6 @@ def discard_reason(record: dict) -> str | None:
         return f"duplicato ({record['duplicate_of']})"
     if record.get("measured_shape") is None:
         return "mai misurato"
-    if not record.get("theme_consistent", True):
-        return "forma fuori bersaglio"
     return None
 
 
