@@ -12,9 +12,12 @@ NESTED_RECORD = {
     "datasetSource": "Bugs4Q",
     "baseline": {
         "sourceCode": "from qiskit import *...",
-        "logicalQubits": 3,
-        "abstractMetrics": {"gateCount": 15, "depth": 8},
-        "physicalMetrics": {"gateCount": 42, "depth": 25},
+        "smellMetrics": {
+            "maxOpsPerQubit": 7,
+            "maxParallelOps": 5,
+            "longCircuit": 35,
+            "idleQubits": 3,
+        },
     },
 }
 

@@ -182,29 +182,29 @@ class ReportVisualizer(IReportVisualizer):
         self._save(pdf, fig)
 
     def _page_long_circuit_reduction(self, pdf: PdfPages, metrics: dict) -> None:
-        gate_values = metrics["long_circuit_gate_reduction_pct"]["values"]
-        depth_values = metrics["long_circuit_depth_reduction_pct"]["values"]
-        title = "Riduzione % Metriche Fisiche (Long Circuit, OPTIMIZED)"
-        if not gate_values and not depth_values:
+        """Un boxplot solo, sulla metrica dello smell.
+
+        Prima erano due serie affiancate (gateCount e depth fisici): misuravano il costo del
+        circuito dopo la transpilazione, non lo smell, e non si muovevano coi refactoring della
+        pipeline.
+        """
+        values = metrics["long_circuit_reduction_pct"]["values"]
+        title = "Riduzione % di l*c (Long Circuit, OPTIMIZED)"
+        if not values:
             self._placeholder_page(pdf, title)
             return
 
         fig, ax = self._new_figure(title)
-        box = ax.boxplot(
-            [gate_values, depth_values],
-            tick_labels=["Gate Count", "Depth"],
-            patch_artist=True,
-            widths=0.4,
-        )
-        for patch, color in zip(box["boxes"], (_BLUE, _ORANGE)):
-            patch.set_facecolor(color)
+        box = ax.boxplot(values, tick_labels=["l * c"], patch_artist=True, widths=0.4)
+        for patch in box["boxes"]:
+            patch.set_facecolor(_BLUE)
             patch.set_alpha(0.65)
         self._style_count_axis(ax, "Riduzione %")
         self._save(pdf, fig)
 
     def _page_idle_qubits_reduction(self, pdf: PdfPages, metrics: dict) -> None:
         values = metrics["idle_qubits_reduction"]["values"]
-        title = "Riduzione Qubit Logici (Idle Qubits, OPTIMIZED)"
+        title = "Riduzione di IdQ (Idle Qubits, OPTIMIZED)"
         if not values:
             self._placeholder_page(pdf, title)
             return
@@ -216,7 +216,7 @@ class ReportVisualizer(IReportVisualizer):
             color=_BLUE,
             edgecolor=_SURFACE,
         )
-        ax.set_xlabel("Qubit logici risparmiati (baseline - refactored)", color=_INK_SECONDARY)
+        ax.set_xlabel("Colonne di attesa eliminate (baseline - refactored)", color=_INK_SECONDARY)
         self._style_count_axis(ax, "Numero di circuiti")
         self._save(pdf, fig)
 

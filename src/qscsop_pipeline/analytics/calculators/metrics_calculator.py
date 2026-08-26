@@ -49,21 +49,25 @@ class MetricsCalculator(IMetricsCalculator):
             "equivalenza_funzionale": self._equivalenza_funzionale(processed),
             "tasso_successo_globale": self._tasso_successo_globale(processed),
             "numero_medio_iterazioni": self._numero_medio_iterazioni(processed),
-            "long_circuit_gate_reduction_pct": self._summary(
+            # Un solo KPI per Long Circuit dove prima ce n'erano due (gateCount e depth fisici).
+            # Quelli misuravano il costo del circuito dopo la transpilazione ed erano ciechi ai
+            # refactoring della pipeline: su tre casi canonici su tre il delta era zero (vedi
+            # docs/misura_metriche_fisiche_pre_rimozione.md), quindi il report avrebbe mostrato
+            # ~0% di riduzione su ogni circuito.
+            "long_circuit_reduction_pct": self._summary(
                 self._pct_reduction(
-                    self._get_column(long_circuit_df, "baseline.physicalMetrics.gateCount"),
-                    self._get_column(long_circuit_df, "refactored.physicalMetrics.gateCount"),
+                    self._get_column(long_circuit_df, "baseline.smellMetrics.longCircuit"),
+                    self._get_column(long_circuit_df, "refactored.smellMetrics.longCircuit"),
                 )
             ),
-            "long_circuit_depth_reduction_pct": self._summary(
-                self._pct_reduction(
-                    self._get_column(long_circuit_df, "baseline.physicalMetrics.depth"),
-                    self._get_column(long_circuit_df, "refactored.physicalMetrics.depth"),
-                )
-            ),
+            # Riduzione ASSOLUTA e non percentuale: IdQ vale spesso 1 o 2 e il fix riuscito lo
+            # porta a 0, dove una percentuale sarebbe sempre 100% e non distinguerebbe un'attesa
+            # da sette. Prima questo KPI misurava logicalQubits baseline meno refactored, che
+            # sotto QSMELL vale sempre zero: un fix di Idle Qubits non rimuove qubit, li tiene
+            # occupati.
             "idle_qubits_reduction": self._summary(
-                self._get_column(idle_qubits_df, "baseline.logicalQubits")
-                - self._get_column(idle_qubits_df, "refactored.logicalQubits")
+                self._get_column(idle_qubits_df, "baseline.smellMetrics.idleQubits")
+                - self._get_column(idle_qubits_df, "refactored.smellMetrics.idleQubits")
             ),
             "distribuzione_failure_reason": self._get_column(
                 opt_failed_df, "evaluation.failureReason"
@@ -87,8 +91,7 @@ class MetricsCalculator(IMetricsCalculator):
             "equivalenza_funzionale": None,
             "tasso_successo_globale": None,
             "numero_medio_iterazioni": None,
-            "long_circuit_gate_reduction_pct": dict(empty_summary),
-            "long_circuit_depth_reduction_pct": dict(empty_summary),
+            "long_circuit_reduction_pct": dict(empty_summary),
             "idle_qubits_reduction": dict(empty_summary),
             "distribuzione_failure_reason": {},
             "distribuzione_stati": {},

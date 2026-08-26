@@ -12,9 +12,12 @@ RECORD_1 = {
     "datasetSource": "Bugs4Q",
     "baseline": {
         "sourceCode": "qc = QuantumCircuit(2)",
-        "logicalQubits": 2,
-        "abstractMetrics": {"gateCount": 2, "depth": 2},
-        "physicalMetrics": {"gateCount": 4, "depth": 3},
+        "smellMetrics": {
+            "maxOpsPerQubit": 2,
+            "maxParallelOps": 2,
+            "longCircuit": 4,
+            "idleQubits": 0,
+        },
     },
 }
 
@@ -23,9 +26,12 @@ RECORD_2 = {
     "datasetSource": "TheSmellyEight",
     "baseline": {
         "sourceCode": "qc = QuantumCircuit(3)",
-        "logicalQubits": 3,
-        "abstractMetrics": {"gateCount": 5, "depth": 4},
-        "physicalMetrics": {"gateCount": 9, "depth": 7},
+        "smellMetrics": {
+            "maxOpsPerQubit": 7,
+            "maxParallelOps": 5,
+            "longCircuit": 35,
+            "idleQubits": 3,
+        },
     },
 }
 
@@ -61,11 +67,31 @@ def test_baseline_is_reconstructed_correctly(tmp_path: Path) -> None:
     baseline = entity.get_baseline()
 
     assert baseline.get_source_code() == "qc = QuantumCircuit(3)"
-    assert baseline.get_logical_qubits() == 3
-    assert baseline.get_abstract_metrics().get_gate_count() == 5
-    assert baseline.get_abstract_metrics().get_depth() == 4
-    assert baseline.get_physical_metrics().get_gate_count() == 9
-    assert baseline.get_physical_metrics().get_depth() == 7
+    assert baseline.get_smell_metrics().get_max_ops_per_qubit() == 7
+    assert baseline.get_smell_metrics().get_max_parallel_ops() == 5
+    assert baseline.get_smell_metrics().get_idle_qubits() == 3
+
+
+@pytest.mark.unit
+def test_long_circuit_is_recomputed_and_not_trusted_from_the_file(tmp_path: Path) -> None:
+    """Il prodotto nel file viene IGNORATO: l'entita' lo riderivera' dai due fattori.
+
+    Qui il record porta un longCircuit deliberatamente falso (999 invece di 35). Se l'adapter lo
+    leggesse, sarebbe possibile caricare un'entita' incoerente coi propri fattori -- l'esatta
+    incoerenza che la property di SmellMetrics esiste per rendere irrappresentabile.
+    """
+    tampered = {
+        **RECORD_2,
+        "baseline": {
+            **RECORD_2["baseline"],
+            "smellMetrics": {**RECORD_2["baseline"]["smellMetrics"], "longCircuit": 999},
+        },
+    }
+    filepath = write_jsonl(tmp_path / "dataset.jsonl", [tampered])
+
+    baseline = next(JsonlDatasetAdapter(filepath=str(filepath)).stream_programs()).get_baseline()
+
+    assert baseline.get_smell_metrics().long_circuit == 35
 
 
 @pytest.mark.unit

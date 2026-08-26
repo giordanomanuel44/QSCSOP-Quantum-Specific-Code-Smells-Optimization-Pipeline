@@ -444,12 +444,21 @@ BATCH_THEMES: list[BatchTheme] = [
         instruction=(
             "Write circuits where the qubits are worked ONE AT A TIME: the first qubit gets a "
             "block of 3 to 5 gates, then the second gets its own block, then the third, and so "
-            "on, so that while one qubit is being worked the others receive nothing. Close the "
-            "circuit with a single shared `qc.measure_all(add_bits=False)` at the very end, "
-            "after all the blocks. Vary the gates used in each block and how many qubits you "
-            "allocate."
+            "on, so that while one qubit is being worked the others receive nothing. Vary the "
+            "gates used in each block and how many qubits you allocate. "
+            "The ONLY measurement in the snippet is a single shared "
+            "`qc.measure_all(add_bits=False)` on the very last line, after every block. Do NOT "
+            "measure a qubit at the end of its own block, and do not use `qc.measure(i, i)` "
+            "anywhere here: measuring each qubit as soon as it is done lets it leave the circuit "
+            "immediately, and this batch needs every finished qubit to stay in the circuit "
+            "waiting for that one shared final step."
         ),
-        example_keys=("sequential_blocks", "per_qubit_measure", "layered_entangling"),
+        # per_qubit_measure e' stato TOLTO da questo lotto. E' idq-fixed.py, cioe' il fix del
+        # paper per il circuito con le attese: mostrarlo qui significava dare come modello
+        # l'esatto anti-pattern del lotto. Nel giro precedente il modello lo ha copiato --
+        # measure per qubit invece della measure_all che l'istruzione chiedeva gia' -- e IdQ e'
+        # crollato da 9 a 0/1, svuotando l'unico lotto che deve produrre attese lunghe.
+        example_keys=("sequential_blocks", "disjoint_subsets", "layered_entangling"),
         count=8,
     ),
     BatchTheme(

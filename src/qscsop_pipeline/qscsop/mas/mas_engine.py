@@ -2,8 +2,8 @@
 
 import logging
 
-from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
+from qscsop_pipeline.qscsop.entities.smell_metrics import SmellMetrics
 from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgramEntity
 from qscsop_pipeline.qscsop.mas.dto.failure_reason import FailureReason
@@ -96,18 +96,18 @@ class MASEngine(IMASEngine):
 
     @staticmethod
     def _build_refactored_version(refactored_code: str, new_metrics: dict) -> CircuitVersion:
-        """Costruisce la CircuitVersion refactored a partire dal dict new_metrics validato."""
-        abstract_metrics = CircuitMetrics(
-            gate_count=new_metrics["abstractMetrics"]["gateCount"],
-            depth=new_metrics["abstractMetrics"]["depth"],
-        )
-        physical_metrics = CircuitMetrics(
-            gate_count=new_metrics["physicalMetrics"]["gateCount"],
-            depth=new_metrics["physicalMetrics"]["depth"],
-        )
+        """Costruisce la CircuitVersion refactored dal payload di misura gia' validato.
+
+        new_metrics e' il payload di IQiskitFacade.calculate_smell_metrics, cioe' la stessa forma
+        su cui ValidationService ha appena dato il verdetto: si legge da li' invece di rimisurare,
+        perche' rimisurare significherebbe poter costruire una versione con numeri diversi da
+        quelli che le hanno fatto superare il controllo.
+        """
         return CircuitVersion(
             source_code=refactored_code,
-            logical_qubits=new_metrics["logicalQubits"],
-            abstract_metrics=abstract_metrics,
-            physical_metrics=physical_metrics,
+            smell_metrics=SmellMetrics(
+                max_ops_per_qubit=new_metrics["longCircuit"]["maxOpsPerQubit"],
+                max_parallel_ops=new_metrics["longCircuit"]["maxParallelOps"],
+                idle_qubits=new_metrics["idleQubits"]["value"],
+            ),
         )

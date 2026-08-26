@@ -1,22 +1,21 @@
 """Entità di dominio pura: una versione (baseline o refactored) di un circuito quantistico."""
 
-from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
+from qscsop_pipeline.qscsop.entities.smell_metrics import SmellMetrics
 
 
 class CircuitVersion:
-    """Sorgente e metriche (astratte e fisiche) di una specifica versione di un circuito."""
+    """Sorgente e misura degli smell di una specifica versione di un circuito.
 
-    def __init__(
-        self,
-        source_code: str,
-        logical_qubits: int,
-        abstract_metrics: CircuitMetrics,
-        physical_metrics: CircuitMetrics,
-    ) -> None:
+    UNA sola SmellMetrics, dove prima c'erano due CircuitMetrics (astratte e fisiche) piu'
+    logical_qubits. Le metriche fisiche sono state rimosse perche' misurate cieche ai refactoring
+    della pipeline (docs/misura_metriche_fisiche_pre_rimozione.md); logical_qubits perche' il suo
+    unico consumatore era un KPI di Analytics che sotto QSMELL vale sempre zero -- un fix di Idle
+    Qubits non rimuove qubit, li tiene occupati.
+    """
+
+    def __init__(self, source_code: str, smell_metrics: SmellMetrics) -> None:
         self._source_code = source_code
-        self._logical_qubits = logical_qubits
-        self._abstract_metrics = abstract_metrics
-        self._physical_metrics = physical_metrics
+        self._smell_metrics = smell_metrics
 
     def get_source_code(self) -> str:
         return self._source_code
@@ -24,29 +23,15 @@ class CircuitVersion:
     def set_source_code(self, value: str) -> None:
         self._source_code = value
 
-    def get_logical_qubits(self) -> int:
-        return self._logical_qubits
+    def get_smell_metrics(self) -> SmellMetrics:
+        return self._smell_metrics
 
-    def set_logical_qubits(self, value: int) -> None:
-        self._logical_qubits = value
-
-    def get_abstract_metrics(self) -> CircuitMetrics:
-        return self._abstract_metrics
-
-    def set_abstract_metrics(self, value: CircuitMetrics) -> None:
-        self._abstract_metrics = value
-
-    def get_physical_metrics(self) -> CircuitMetrics:
-        return self._physical_metrics
-
-    def set_physical_metrics(self, value: CircuitMetrics) -> None:
-        self._physical_metrics = value
+    def set_smell_metrics(self, value: SmellMetrics) -> None:
+        self._smell_metrics = value
 
     def to_dict(self) -> dict:
-        """Serializza la versione, annidando le metriche come dict tramite il loro to_dict()."""
+        """Serializza la versione, annidando la misura come dict tramite il suo to_dict()."""
         return {
             "sourceCode": self._source_code,
-            "logicalQubits": self._logical_qubits,
-            "abstractMetrics": self._abstract_metrics.to_dict(),
-            "physicalMetrics": self._physical_metrics.to_dict(),
+            "smellMetrics": self._smell_metrics.to_dict(),
         }

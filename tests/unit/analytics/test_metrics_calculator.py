@@ -4,21 +4,27 @@ import pytest
 from qscsop_pipeline.analytics.calculators.metrics_calculator import MetricsCalculator
 
 
-def _baseline(gate_count=10, depth=8, logical_qubits=3):
+def _smell_metrics(long_circuit, idle_qubits):
+    """Misura coerente: i due fattori si moltiplicano davvero nel prodotto dichiarato."""
     return {
-        "sourceCode": "qc = QuantumCircuit(3)\n",
-        "logicalQubits": logical_qubits,
-        "abstractMetrics": {"gateCount": gate_count, "depth": depth},
-        "physicalMetrics": {"gateCount": gate_count, "depth": depth},
+        "maxOpsPerQubit": long_circuit,
+        "maxParallelOps": 1,
+        "longCircuit": long_circuit,
+        "idleQubits": idle_qubits,
     }
 
 
-def _refactored(gate_count, depth, logical_qubits):
+def _baseline(long_circuit=10, idle_qubits=3):
     return {
-        "sourceCode": "qc = QuantumCircuit(3)\nqc.h(0)\n",
-        "logicalQubits": logical_qubits,
-        "abstractMetrics": {"gateCount": gate_count, "depth": depth},
-        "physicalMetrics": {"gateCount": gate_count, "depth": depth},
+        "sourceCode": "qc = QuantumCircuit(3)",
+        "smellMetrics": _smell_metrics(long_circuit, idle_qubits),
+    }
+
+
+def _refactored(long_circuit, idle_qubits):
+    return {
+        "sourceCode": "qc = QuantumCircuit(3) + h",
+        "smellMetrics": _smell_metrics(long_circuit, idle_qubits),
     }
 
 
@@ -57,19 +63,17 @@ def _optimized(
     circuit_id="c",
     dataset_source="Bugs4Q",
     detected_smells=("long_circuit",),
-    baseline_gate_count=10,
-    baseline_depth=8,
-    baseline_qubits=3,
-    new_gate_count=8,
-    new_depth=6,
-    new_qubits=3,
+    baseline_long_circuit=10,
+    baseline_idle_qubits=3,
+    new_long_circuit=8,
+    new_idle_qubits=1,
     iteration_count=1,
 ):
     return {
         "circuitId": circuit_id,
         "datasetSource": dataset_source,
-        "baseline": _baseline(baseline_gate_count, baseline_depth, baseline_qubits),
-        "refactored": _refactored(new_gate_count, new_depth, new_qubits),
+        "baseline": _baseline(baseline_long_circuit, baseline_idle_qubits),
+        "refactored": _refactored(new_long_circuit, new_idle_qubits),
         "evaluation": {
             "isFunctionallyEquivalent": True,
             "iterationCount": iteration_count,
@@ -141,21 +145,17 @@ def test_calculate_category2_gate_and_depth_reduction_on_long_circuit_optimized(
             _optimized(
                 "c1",
                 detected_smells=("long_circuit",),
-                baseline_gate_count=10,
-                baseline_depth=8,
-                new_gate_count=8,
-                new_depth=4,
+                baseline_long_circuit=10,
+                new_long_circuit=8,
             ),
         ]
     )
 
     metrics = MetricsCalculator().calculate(df)
 
-    # (10-8)/10*100 = 20%, (8-4)/8*100 = 50%.
-    assert metrics["long_circuit_gate_reduction_pct"]["values"] == pytest.approx([20.0])
-    assert metrics["long_circuit_gate_reduction_pct"]["mean"] == pytest.approx(20.0)
-    assert metrics["long_circuit_depth_reduction_pct"]["values"] == pytest.approx([50.0])
-    assert metrics["long_circuit_depth_reduction_pct"]["mean"] == pytest.approx(50.0)
+    # (10-8)/10*100 = 20%.
+    assert metrics["long_circuit_reduction_pct"]["values"] == pytest.approx([20.0])
+    assert metrics["long_circuit_reduction_pct"]["mean"] == pytest.approx(20.0)
 
 
 @pytest.mark.unit
@@ -165,10 +165,10 @@ def test_calculate_category2_handles_double_smell_circuit_in_both_subsets() -> N
             _optimized(
                 "c1",
                 detected_smells=("long_circuit", "idle_qubits"),
-                baseline_gate_count=10,
-                baseline_qubits=5,
-                new_gate_count=5,
-                new_qubits=2,
+                baseline_long_circuit=10,
+                baseline_idle_qubits=5,
+                new_long_circuit=5,
+                new_idle_qubits=2,
             ),
         ]
     )
@@ -176,7 +176,7 @@ def test_calculate_category2_handles_double_smell_circuit_in_both_subsets() -> N
     metrics = MetricsCalculator().calculate(df)
 
     # Lo stesso circuito contribuisce indipendentemente a entrambe le sotto-metriche.
-    assert metrics["long_circuit_gate_reduction_pct"]["values"] == pytest.approx([50.0])
+    assert metrics["long_circuit_reduction_pct"]["values"] == pytest.approx([50.0])
     assert metrics["idle_qubits_reduction"]["values"] == pytest.approx([3.0])
 
 
@@ -195,12 +195,11 @@ def test_calculate_handles_dataset_with_no_optimized_circuits_without_keyerror()
     # Nessun record ha "refactored": la colonna refactored.* e' del tutto assente dal DataFrame,
     # non semplicemente NaN. calculate() non deve sollevare KeyError.
     df = _df([_smell_free("c0"), _opt_failed("c1")])
-    assert "refactored.physicalMetrics.gateCount" not in df.columns
+    assert "refactored.smellMetrics.longCircuit" not in df.columns
 
     metrics = MetricsCalculator().calculate(df)
 
-    assert metrics["long_circuit_gate_reduction_pct"] == {"mean": None, "values": []}
-    assert metrics["long_circuit_depth_reduction_pct"] == {"mean": None, "values": []}
+    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": []}
     assert metrics["idle_qubits_reduction"] == {"mean": None, "values": []}
 
 
@@ -255,7 +254,7 @@ def test_calculate_on_completely_empty_dataframe_does_not_raise() -> None:
     assert metrics["equivalenza_funzionale"] is None
     assert metrics["tasso_successo_globale"] is None
     assert metrics["numero_medio_iterazioni"] is None
-    assert metrics["long_circuit_gate_reduction_pct"] == {"mean": None, "values": []}
+    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": []}
     assert metrics["distribuzione_failure_reason"] == {}
     assert metrics["distribuzione_stati"] == {}
     assert metrics["metriche_per_dataset_source"] == {}
@@ -268,8 +267,8 @@ def test_pct_reduction_avoids_division_by_zero_on_degenerate_baseline() -> None:
             _optimized(
                 "c1",
                 detected_smells=("long_circuit",),
-                baseline_gate_count=0,
-                new_gate_count=0,
+                baseline_long_circuit=0,
+                new_long_circuit=0,
             ),
         ]
     )
@@ -277,4 +276,4 @@ def test_pct_reduction_avoids_division_by_zero_on_degenerate_baseline() -> None:
     metrics = MetricsCalculator().calculate(df)
 
     # baseline=0 -> divisione per zero evitata, il valore e' scartato (NaN -> dropna), non 0/0.
-    assert metrics["long_circuit_gate_reduction_pct"] == {"mean": None, "values": []}
+    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": []}

@@ -10,9 +10,12 @@ _SMELL_FREE_RECORD = {
     "datasetSource": "Bugs4Q",
     "baseline": {
         "sourceCode": "qc = QuantumCircuit(1)\n",
-        "logicalQubits": 1,
-        "abstractMetrics": {"gateCount": 1, "depth": 1},
-        "physicalMetrics": {"gateCount": 2, "depth": 2},
+        "smellMetrics": {
+            "maxOpsPerQubit": 1,
+            "maxParallelOps": 1,
+            "longCircuit": 1,
+            "idleQubits": 0,
+        },
     },
     "evaluation": {
         "isFunctionallyEquivalent": None,
@@ -27,9 +30,12 @@ _OPT_FAILED_RECORD = {
     "datasetSource": "TheSmellyEight",
     "baseline": {
         "sourceCode": "qc = QuantumCircuit(2)\n",
-        "logicalQubits": 2,
-        "abstractMetrics": {"gateCount": 5, "depth": 4},
-        "physicalMetrics": {"gateCount": 10, "depth": 8},
+        "smellMetrics": {
+            "maxOpsPerQubit": 5,
+            "maxParallelOps": 4,
+            "longCircuit": 20,
+            "idleQubits": 2,
+        },
     },
     "evaluation": {
         "isFunctionallyEquivalent": False,
@@ -45,15 +51,21 @@ _OPTIMIZED_RECORD = {
     "datasetSource": "Bugs4Q",
     "baseline": {
         "sourceCode": "qc = QuantumCircuit(3)\n",
-        "logicalQubits": 3,
-        "abstractMetrics": {"gateCount": 5, "depth": 4},
-        "physicalMetrics": {"gateCount": 10, "depth": 8},
+        "smellMetrics": {
+            "maxOpsPerQubit": 7,
+            "maxParallelOps": 5,
+            "longCircuit": 35,
+            "idleQubits": 3,
+        },
     },
     "refactored": {
         "sourceCode": "qc = QuantumCircuit(3)\nqc.h(0)\n",
-        "logicalQubits": 3,
-        "abstractMetrics": {"gateCount": 4, "depth": 4},
-        "physicalMetrics": {"gateCount": 8, "depth": 8},
+        "smellMetrics": {
+            "maxOpsPerQubit": 4,
+            "maxParallelOps": 5,
+            "longCircuit": 20,
+            "idleQubits": 0,
+        },
     },
     "evaluation": {
         "isFunctionallyEquivalent": True,
@@ -90,18 +102,16 @@ def test_load_flattens_nested_keys_with_dot_notation(tmp_path) -> None:
 
     df = DataLoader(filepath=filepath).load()
 
-    assert df.loc[0, "baseline.logicalQubits"] == 3
-    assert df.loc[0, "baseline.physicalMetrics.gateCount"] == 10
-    assert df.loc[0, "refactored.physicalMetrics.gateCount"] == 8
+    assert df.loc[0, "baseline.smellMetrics.longCircuit"] == 35
+    assert df.loc[0, "baseline.smellMetrics.idleQubits"] == 3
+    assert df.loc[0, "refactored.smellMetrics.longCircuit"] == 20
     assert df.loc[0, "evaluation.status"] == "OPTIMIZED"
 
 
 @pytest.mark.unit
 def test_load_fills_missing_refactored_block_with_nan(tmp_path) -> None:
     # _SMELL_FREE_RECORD e _OPT_FAILED_RECORD non hanno "refactored".
-    filepath = _write_jsonl(
-        tmp_path / "risultati.jsonl", [_SMELL_FREE_RECORD, _OPT_FAILED_RECORD]
-    )
+    filepath = _write_jsonl(tmp_path / "risultati.jsonl", [_SMELL_FREE_RECORD, _OPT_FAILED_RECORD])
 
     df = DataLoader(filepath=filepath).load()
 

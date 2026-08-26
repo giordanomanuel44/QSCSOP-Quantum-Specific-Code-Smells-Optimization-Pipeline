@@ -1,69 +1,78 @@
+"""Unit test della versione di circuito (baseline o refactored)."""
+
 import pytest
 
-from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
+from qscsop_pipeline.qscsop.entities.smell_metrics import SmellMetrics
+
+_SOURCE = "qc = QuantumCircuit(2)"
 
 
-def make_version() -> CircuitVersion:
+def _version() -> CircuitVersion:
     return CircuitVersion(
-        source_code="qc = QuantumCircuit(2)",
-        logical_qubits=2,
-        abstract_metrics=CircuitMetrics(gate_count=2, depth=2),
-        physical_metrics=CircuitMetrics(gate_count=4, depth=3),
+        source_code=_SOURCE,
+        smell_metrics=SmellMetrics(max_ops_per_qubit=7, max_parallel_ops=5, idle_qubits=3),
     )
 
 
 @pytest.mark.unit
 def test_constructor_and_getters() -> None:
-    version = make_version()
+    version = _version()
 
-    assert version.get_source_code() == "qc = QuantumCircuit(2)"
-    assert version.get_logical_qubits() == 2
-    assert version.get_abstract_metrics().to_dict() == {"gateCount": 2, "depth": 2}
-    assert version.get_physical_metrics().to_dict() == {"gateCount": 4, "depth": 3}
+    assert version.get_source_code() == _SOURCE
+    assert version.get_smell_metrics().long_circuit == 35
 
 
 @pytest.mark.unit
 def test_setters_update_fields() -> None:
-    version = make_version()
-    new_abstract = CircuitMetrics(gate_count=9, depth=9)
-    new_physical = CircuitMetrics(gate_count=8, depth=8)
+    version = _version()
+    replacement = SmellMetrics(max_ops_per_qubit=1, max_parallel_ops=1, idle_qubits=0)
 
     version.set_source_code("qc = QuantumCircuit(3)")
-    version.set_logical_qubits(3)
-    version.set_abstract_metrics(new_abstract)
-    version.set_physical_metrics(new_physical)
+    version.set_smell_metrics(replacement)
 
     assert version.get_source_code() == "qc = QuantumCircuit(3)"
-    assert version.get_logical_qubits() == 3
-    assert version.get_abstract_metrics() is new_abstract
-    assert version.get_physical_metrics() is new_physical
+    assert version.get_smell_metrics() is replacement
 
 
 @pytest.mark.unit
-def test_to_dict_produces_nested_structure_as_plain_dicts() -> None:
-    version = make_version()
-
-    result = version.to_dict()
+def test_to_dict_nests_the_measure_as_a_plain_dict() -> None:
+    result = _version().to_dict()
 
     assert result == {
-        "sourceCode": "qc = QuantumCircuit(2)",
-        "logicalQubits": 2,
-        "abstractMetrics": {"gateCount": 2, "depth": 2},
-        "physicalMetrics": {"gateCount": 4, "depth": 3},
+        "sourceCode": _SOURCE,
+        "smellMetrics": {
+            "maxOpsPerQubit": 7,
+            "maxParallelOps": 5,
+            "longCircuit": 35,
+            "idleQubits": 3,
+        },
     }
-    assert isinstance(result["abstractMetrics"], dict)
-    assert isinstance(result["physicalMetrics"], dict)
+    assert isinstance(result["smellMetrics"], dict)
+
+
+@pytest.mark.unit
+def test_to_dict_carries_no_cost_metrics_any_more() -> None:
+    """Regressione: le chiavi rimosse non devono rientrare dalla finestra.
+
+    logicalQubits, abstractMetrics e physicalMetrics sono uscite dal contratto dati con questo
+    refactoring; se un giorno ricomparissero, il record tornerebbe a portare misure che nessuno
+    consuma e che sono cieche ai refactoring della pipeline.
+    """
+    result = _version().to_dict()
+
+    assert set(result) == {"sourceCode", "smellMetrics"}
 
 
 @pytest.mark.unit
 def test_to_dict_reflects_updates_after_set() -> None:
-    version = make_version()
+    version = _version()
 
-    version.set_logical_qubits(7)
-    version.set_abstract_metrics(CircuitMetrics(gate_count=1, depth=1))
+    version.set_smell_metrics(SmellMetrics(max_ops_per_qubit=4, max_parallel_ops=2, idle_qubits=1))
 
-    result = version.to_dict()
-
-    assert result["logicalQubits"] == 7
-    assert result["abstractMetrics"] == {"gateCount": 1, "depth": 1}
+    assert version.to_dict()["smellMetrics"] == {
+        "maxOpsPerQubit": 4,
+        "maxParallelOps": 2,
+        "longCircuit": 8,
+        "idleQubits": 1,
+    }

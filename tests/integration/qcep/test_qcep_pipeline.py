@@ -111,17 +111,29 @@ def test_qcep_main_end_to_end_with_real_dependencies(
         assert isinstance(record["datasetSource"], str)
         baseline = record["baseline"]
         assert isinstance(baseline["sourceCode"], str)
-        assert isinstance(baseline["logicalQubits"], int)
-        assert isinstance(baseline["abstractMetrics"]["gateCount"], int)
-        assert isinstance(baseline["abstractMetrics"]["depth"], int)
-        assert isinstance(baseline["physicalMetrics"]["gateCount"], int)
-        assert isinstance(baseline["physicalMetrics"]["depth"], int)
+        # Il baseline porta esattamente due chiavi: il sorgente e la misura degli smell. Le
+        # metriche di costo (logicalQubits, abstractMetrics, physicalMetrics) sono uscite dal
+        # contratto insieme alla transpilazione.
+        assert set(baseline) == {"sourceCode", "smellMetrics"}
+        for measure in baseline["smellMetrics"].values():
+            assert isinstance(measure, int)
 
+    # Valori misurati sulle due fixture con la facade reale, non stimati.
     bugs4q_record = records_by_source["Bugs4Q"]
     assert bugs4q_record["circuitId"] == "bell_state"
-    assert bugs4q_record["baseline"]["logicalQubits"] == 2
-    assert bugs4q_record["baseline"]["abstractMetrics"] == {"gateCount": 2, "depth": 2}
+    assert bugs4q_record["baseline"]["smellMetrics"] == {
+        "maxOpsPerQubit": 2,
+        "maxParallelOps": 2,
+        "longCircuit": 4,
+        "idleQubits": 0,
+    }
 
+    # h su tre qubit disgiunti: scivolano tutti nella stessa colonna, quindi c = 3 con l = 1.
     smelly_record = records_by_source["TheSmellyEight"]
     assert smelly_record["circuitId"] == "lc-smelly"
-    assert smelly_record["baseline"]["logicalQubits"] == 3
+    assert smelly_record["baseline"]["smellMetrics"] == {
+        "maxOpsPerQubit": 1,
+        "maxParallelOps": 3,
+        "longCircuit": 3,
+        "idleQubits": 0,
+    }

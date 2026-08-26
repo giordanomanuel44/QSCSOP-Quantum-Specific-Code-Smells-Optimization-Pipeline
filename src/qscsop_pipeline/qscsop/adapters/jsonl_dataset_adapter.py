@@ -4,14 +4,19 @@ import json
 from collections.abc import Generator
 from pathlib import Path
 
-from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
+from qscsop_pipeline.qscsop.entities.smell_metrics import SmellMetrics
 from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgramEntity
 from qscsop_pipeline.qscsop.interfaces.i_dataset_adapter import IDatasetAdapter
 
 
 class JsonlDatasetAdapter(IDatasetAdapter):
-    """Legge un file JSON Lines (formato Listing 1.2) e lo ricostruisce come entità di dominio."""
+    """Legge un file JSON Lines (formato Listing 1.2) e lo ricostruisce come entità di dominio.
+
+    Il formato letto e' quello prodotto da QuantumMetricsService: sorgente piu' misura QSMELL.
+    I due lati non condividono codice -- lo schema e' il contratto implicito fra QCEP e QSCSOP --
+    quindi vanno tenuti allineati a mano.
+    """
 
     def __init__(self, filepath: str) -> None:
         self._filepath = Path(filepath)
@@ -32,19 +37,17 @@ class JsonlDatasetAdapter(IDatasetAdapter):
         file e' gia' stato prodotto e validato da QCEP stesso.
         """
         baseline_record = record["baseline"]
-        abstract_metrics = CircuitMetrics(
-            gate_count=baseline_record["abstractMetrics"]["gateCount"],
-            depth=baseline_record["abstractMetrics"]["depth"],
-        )
-        physical_metrics = CircuitMetrics(
-            gate_count=baseline_record["physicalMetrics"]["gateCount"],
-            depth=baseline_record["physicalMetrics"]["depth"],
-        )
+        smell_record = baseline_record["smellMetrics"]
+        # longCircuit non viene letto: e' derivato da SmellMetrics come prodotto dei due fattori.
+        # Ricostruirlo dal file significherebbe poter caricare un'entita' in cui il prodotto non
+        # corrisponde ai suoi fattori, cioe' rimettere dentro l'incoerenza che la property evita.
         baseline = CircuitVersion(
             source_code=baseline_record["sourceCode"],
-            logical_qubits=baseline_record["logicalQubits"],
-            abstract_metrics=abstract_metrics,
-            physical_metrics=physical_metrics,
+            smell_metrics=SmellMetrics(
+                max_ops_per_qubit=smell_record["maxOpsPerQubit"],
+                max_parallel_ops=smell_record["maxParallelOps"],
+                idle_qubits=smell_record["idleQubits"],
+            ),
         )
         return QuantumProgramEntity(
             circuit_id=record["circuitId"],

@@ -38,14 +38,13 @@ def _equivalence_failure(raw_error_details: str = _RAW_ERROR) -> ValidationResul
 
 
 def _metrics_not_improved_failure() -> ValidationResultDTO:
-    """Fallimento del nodo "Migliori?": new_metrics popolato, come da Modifica 1 di ValidationService."""
+    """Fallimento del nodo "Migliori?": new_metrics popolato, e' il segnale strutturale."""
     return ValidationResultDTO(
         is_valid=False,
-        raw_error_data="Il refactoring non ha migliorato le metriche fisiche rispetto alla baseline.",
+        raw_error_data="Il refactoring non ha ridotto nessuna delle due metriche di smell.",
         new_metrics={
-            "logicalQubits": 3,
-            "abstractMetrics": {"gateCount": 5, "depth": 4},
-            "physicalMetrics": {"gateCount": 10, "depth": 8},
+            "longCircuit": {"maxOpsPerQubit": 7, "maxParallelOps": 5, "value": 35},
+            "idleQubits": {"value": 3, "worstQubit": 0},
         },
     )
 
@@ -55,29 +54,27 @@ def _metrics_no_improvement_at_all_failure() -> ValidationResultDTO:
     return ValidationResultDTO(
         is_valid=False,
         raw_error_data=(
-            "Il refactoring non ha migliorato le metriche fisiche rispetto alla baseline. "
-            "Baseline: gateCount=10, depth=8, qubit=3. Refactored: gateCount=10, depth=8, qubit=3."
+            "Il refactoring non ha ridotto nessuna delle due metriche di smell rispetto alla "
+            "baseline. Baseline: l*c=35, IdQ=3. Refactored: l*c=35, IdQ=3."
         ),
         new_metrics={
-            "logicalQubits": 3,
-            "abstractMetrics": {"gateCount": 5, "depth": 4},
-            "physicalMetrics": {"gateCount": 10, "depth": 8},
+            "longCircuit": {"maxOpsPerQubit": 7, "maxParallelOps": 5, "value": 35},
+            "idleQubits": {"value": 3, "worstQubit": 0},
         },
     )
 
 
 def _metrics_near_miss_failure() -> ValidationResultDTO:
-    """CASE 2: gateCount e qubit migliorano, ma depth peggiora rispetto alla baseline."""
+    """CASE 2: IdQ migliora ma l*c peggiora -- il baratto fra i due smell, vietato da Pareto."""
     return ValidationResultDTO(
         is_valid=False,
         raw_error_data=(
-            "Il refactoring non ha migliorato le metriche fisiche rispetto alla baseline. "
-            "Baseline: gateCount=31, depth=14, qubit=5. Refactored: gateCount=28, depth=15, qubit=3."
+            "Il refactoring non ha ridotto nessuna delle due metriche di smell rispetto alla "
+            "baseline. Baseline: l*c=35, IdQ=3. Refactored: l*c=42, IdQ=0."
         ),
         new_metrics={
-            "logicalQubits": 3,
-            "abstractMetrics": {"gateCount": 16, "depth": 10},
-            "physicalMetrics": {"gateCount": 28, "depth": 15},
+            "longCircuit": {"maxOpsPerQubit": 7, "maxParallelOps": 5, "value": 35},
+            "idleQubits": {"value": 3, "worstQubit": 0},
         },
     )
 

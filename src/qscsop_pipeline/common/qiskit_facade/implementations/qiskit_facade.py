@@ -7,13 +7,11 @@ from contextlib import contextmanager
 from itertools import combinations
 from typing import Optional
 
-from qiskit import QuantumCircuit, transpile
+from qiskit import QuantumCircuit
 from qiskit.circuit import ControlFlowOp
-from qiskit.providers.fake_provider import GenericBackendV2
 from qiskit.quantum_info import (
     DensityMatrix,
     Operator,
-    Statevector,
     partial_trace,
     state_fidelity,
 )
@@ -22,13 +20,7 @@ from qscsop_pipeline.common.qiskit_facade.interfaces.i_qiskit_facade import IQis
 
 
 class QiskitFacade(IQiskitFacade):
-    """Incapsula isolamento, transpilazione e calcolo metriche tramite Qiskit."""
-
-    # GenericBackendV2 sostituisce i Fake Backend concreti a 5 qubit (FakeManila, FakeAthens),
-    # rimossi da qiskit.providers.fake_provider a partire da Qiskit 2.x: genera un backend
-    # parametrico con basis gates e coupling map realistici, equivalente ai fini della transpilazione.
-    _DEFAULT_NUM_QUBITS = 5
-    _BACKEND_SEED = 42
+    """Incapsula isolamento, equivalenza funzionale e misura degli smell tramite Qiskit."""
 
     # Limite oltre il quale il confronto a dimensioni diverse non viene tentato: la DensityMatrix
     # cresce come 2^N x 2^N complessi, quindi a 12 qubit occupa gia' ~268 MB (4096^2 * 16 byte) e
@@ -47,21 +39,16 @@ class QiskitFacade(IQiskitFacade):
     # virgola mobile accumulato da partial_trace e dalla radice di matrice interna a state_fidelity.
     _EQUIVALENCE_TOLERANCE = 1e-6
 
-    # Valore generico e NON nullo con cui legare i Parameter liberi prima di costruire uno stato
-    # (DensityMatrix non accetta operazioni parametriche): il verdetto di is_qubit_idle non
-    # dipende dal valore specifico, ma 0 va evitato perche' coinciderebbe con l'identita' per
-    # molti gate parametrici (rx(0) = I), facendo risultare idle un qubit ruotato davvero.
-    _GENERIC_PARAMETER_VALUE = 0.4321
-
     # Errore di gate usato SOLO per la forma esponenziale (1 - error)^(l*c) con cui il paper
     # QSMELL presenta la metrica Long Circuit nelle sue tabelle. Non entra nel valore della
     # metrica: l'implementazione di riferimento (qsmell/smell/LC.py) ritorna il prodotto l*c
     # grezzo, senza alcuna costante hardware. Il valore adottato e' l'errore massimo di
-    # GenericBackendV2(num_qubits=5, seed=42), cioe' lo stesso target su cui transpila questa
-    # facade; e' congelato come costante e NON riletto dal backend per-circuito, perche'
-    # GenericBackendV2 lo estrae pseudo-casualmente e varia con la dimensione richiesta
-    # (0.00416 a 3 qubit, 0.00496 a 10): rileggerlo renderebbe non confrontabili fra loro le
-    # metriche di circuiti di taglia diversa nello stesso dataset.
+    # GenericBackendV2(num_qubits=5, seed=42), il backend su cui questa facade transpilava finche'
+    # produceva anche le metriche fisiche; e' congelato come costante perche' quel backend lo
+    # estrae pseudo-casualmente e lo fa variare con la dimensione richiesta (0.00416 a 3 qubit,
+    # 0.00496 a 10), il che renderebbe non confrontabili fra loro circuiti di taglia diversa
+    # nello stesso dataset. Da qui in poi e' un numero fissato, non piu' riletto da nulla:
+    # la transpilazione e' uscita dal progetto insieme alle metriche di costo.
     _MAX_GATE_ERROR = 0.00485
 
     def isolate_circuit(self, source_code: str) -> QuantumCircuit:
@@ -88,25 +75,6 @@ class QiskitFacade(IQiskitFacade):
                 "Nessun QuantumCircuit trovato tra le variabili assegnate dal codice sorgente."
             )
         return circuit
-
-    def get_abstract_metrics(self, qc: QuantumCircuit) -> dict:
-        """Ritorna gateCount e depth del circuito prima della transpilazione."""
-        return self._extract_metrics(qc)
-
-    def transpile_circuit(self, qc: QuantumCircuit) -> QuantumCircuit:
-        """Transpila il circuito su un Fake Backend per simulare l'hardware reale."""
-        num_qubits = max(qc.num_qubits, self._DEFAULT_NUM_QUBITS)
-        backend = GenericBackendV2(num_qubits=num_qubits, seed=self._BACKEND_SEED)
-        return transpile(qc, backend=backend)
-
-    def get_physical_metrics(self, qc: QuantumCircuit) -> dict:
-        """Ritorna gateCount e depth del circuito dopo la transpilazione."""
-        return self._extract_metrics(qc)
-
-    @staticmethod
-    def _extract_metrics(qc: QuantumCircuit) -> dict:
-        """Calcola la coppia gateCount/depth condivisa da metriche astratte e fisiche."""
-        return {"gateCount": qc.size(), "depth": qc.depth()}
 
     def compile_circuit(self, source_code: str) -> tuple[bool, Optional[str]]:
         """Tenta di isolare source_code; ritorna (True, None) o (False, messaggio d'errore)."""
@@ -303,99 +271,6 @@ class QiskitFacade(IQiskitFacade):
                 continue
             pure_circuit.append(instruction.operation, instruction.qubits, instruction.clbits)
         return pure_circuit
-
-    def is_qubit_idle(self, source_code: str, qubit_index: int) -> bool:
-        """Isola il codice e verifica se il qubit indicato resta inerte (stato fisso, scorrelato).
-
-        Definizione operativa allineata a quella usata dal DetectorAgent: un qubit e' idle quando
-        la sua sequenza NETTA di gate equivale all'identita', cioe' quando a fine circuito si
-        ritrova esattamente nello stato |0> in cui era partito, non correlato agli altri qubit —
-        "come se non fosse mai stato toccato". Copre quindi sia il caso strutturale (zero gate)
-        sia quello comportamentale (gate reali che si annullano, es. due H consecutivi seguiti da
-        soli gate di fase), che il conteggio delle operazioni non puo' distinguere.
-
-        La verifica passa dallo stato ridotto (partial_trace su tutti gli ALTRI qubit), che
-        risponde esattamente alla domanda "ignorando il resto del circuito, cosa resta su questo
-        qubit?": se il qubit e' entangled la riduzione produce uno stato MISTO, distinguibile da
-        |0><0|, quindi non idle. Un qubit che riceve un singolo gate reale (es. una X, che lo
-        porta in |1>) NON e' idle pur avendo esito deterministico — coerente con la distinzione
-        esplicita del prompt di DetectorAgent fra "esito prevedibile" e "effetto netto nullo".
-
-        Ritorna un bool: nessun oggetto Qiskit attraversa il confine della facade.
-        """
-        circuit = self.isolate_circuit(source_code)
-
-        if not 0 <= qubit_index < circuit.num_qubits:
-            raise ValueError(
-                f"Indice di qubit fuori range: {qubit_index} "
-                f"(il circuito ne dichiara {circuit.num_qubits})."
-            )
-
-        # Stessa guardia di check_equivalence e per lo stesso motivo: la DensityMatrix modella
-        # l'evoluzione di uno stato puro e non puo' rappresentare feedback classico.
-        self._reject_classical_feedback(circuit)
-
-        pure_circuit = self._strip_measurements(circuit)
-
-        # Guardia conservativa, riusata dal ramo partial_trace di check_equivalence. Qui il costo
-        # e' molto piu' basso di la': lo stato di partenza e' uno Statevector (2^N ampiezze), non
-        # una DensityMatrix (2^N x 2^N). La differenza NON e' un'ottimizzazione opzionale, e'
-        # dirimente: misurata su questo stesso metodo, interrogare tutti i qubit di un circuito a
-        # 12 qubit costa ~142 s via DensityMatrix contro ~0.02 s via Statevector, e la versione
-        # DensityMatrix alloca ~268 MB per ogni qubit interrogato — su una macchina con poca RAM
-        # degenera in swap e sembra un blocco. Lo Statevector e' lecito perche' a questo punto il
-        # circuito e' garantito PURO: le misure sono state rimosse e il feedback classico gia'
-        # rifiutato sopra.
-        if pure_circuit.num_qubits > self._MAX_PARTIAL_TRACE_QUBITS:
-            raise ValueError(
-                f"Circuito troppo grande per l'analisi di idle via partial_trace "
-                f"({pure_circuit.num_qubits} qubit, limite {self._MAX_PARTIAL_TRACE_QUBITS}) — "
-                f"verifica non eseguita."
-            )
-
-        pure_circuit = self._bind_free_parameters(pure_circuit)
-
-        state = Statevector.from_instruction(pure_circuit)
-        other_qubits = [i for i in range(pure_circuit.num_qubits) if i != qubit_index]
-        # partial_trace su uno Statevector ritorna comunque una DensityMatrix (lo stato ridotto di
-        # un qubit entangled e' MISTO per definizione, non rappresentabile come stato puro).
-        reduced_state = partial_trace(state, other_qubits)
-
-        # validate=False per la stessa ragione di _partial_trace_equivalent: partial_trace produce
-        # per costruzione uno stato a traccia 1, ma la verifica interna di Qiskit e' esatta e
-        # solleverebbe su deviazioni puramente numeriche.
-        fidelity = state_fidelity(reduced_state, DensityMatrix.from_label("0"), validate=False)
-        return bool(fidelity >= 1.0 - self._EQUIVALENCE_TOLERANCE)
-
-    @classmethod
-    def _bind_free_parameters(cls, circuit: QuantumCircuit) -> QuantumCircuit:
-        """Lega a un valore generico eventuali Parameter liberi, che DensityMatrix non accetta."""
-        if not circuit.parameters:
-            return circuit
-        return circuit.assign_parameters(
-            {param: cls._GENERIC_PARAMETER_VALUE for param in circuit.parameters}
-        )
-
-    def calculate_metrics(self, code: str) -> dict:
-        """Isola, transpila e ritorna logicalQubits + abstractMetrics + physicalMetrics.
-
-        Il payload ha forma:
-        {"logicalQubits": int, "abstractMetrics": {...}, "physicalMetrics": {...}}.
-        """
-        qc = self.isolate_circuit(code)
-        abstract_metrics = self.get_abstract_metrics(qc)
-        transpiled_qc = self.transpile_circuit(qc)
-        physical_metrics = self.get_physical_metrics(transpiled_qc)
-        # logicalQubits e' letto dal circuito ISOLATO (qc), non dal transpiled_qc: la
-        # transpilazione padda il circuito ai qubit del backend (almeno _DEFAULT_NUM_QUBITS = 5),
-        # falsando il conteggio logico. E' fratello di abstractMetrics/physicalMetrics, non
-        # contenuto in essi: stessa gerarchia del Listing 1.2 della tesi e della classe
-        # CircuitVersion, dove logical_qubits e' un campo separato dalle due CircuitMetrics.
-        return {
-            "logicalQubits": qc.num_qubits,
-            "abstractMetrics": abstract_metrics,
-            "physicalMetrics": physical_metrics,
-        }
 
     def calculate_smell_metrics(self, code: str) -> dict:
         """Isola il codice e ritorna le metriche Long Circuit e Idle Qubits secondo QSMELL.

@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
+from qscsop_pipeline.qscsop.entities.smell_metrics import SmellMetrics
 from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgramEntity
 from qscsop_pipeline.qscsop.sinks.jsonl_data_sink import JsonlDataSink
 
@@ -12,9 +12,7 @@ from qscsop_pipeline.qscsop.sinks.jsonl_data_sink import JsonlDataSink
 def make_version(source_code: str = "qc = QuantumCircuit(2)") -> CircuitVersion:
     return CircuitVersion(
         source_code=source_code,
-        logical_qubits=2,
-        abstract_metrics=CircuitMetrics(gate_count=2, depth=2),
-        physical_metrics=CircuitMetrics(gate_count=4, depth=3),
+        smell_metrics=SmellMetrics(max_ops_per_qubit=2, max_parallel_ops=2, idle_qubits=0),
     )
 
 

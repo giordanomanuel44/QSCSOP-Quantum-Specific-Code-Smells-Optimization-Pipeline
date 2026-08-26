@@ -20,8 +20,8 @@ import pytest
 from crewai import LLM
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
-from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
+from qscsop_pipeline.qscsop.entities.smell_metrics import SmellMetrics
 from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgramEntity
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
@@ -39,27 +39,21 @@ _TAG = "[MASEngine E2E]"
 
 
 def _build_baseline_entity(facade: QiskitFacade) -> QuantumProgramEntity:
-    """Costruisce la QuantumProgramEntity di ingresso con metriche di baseline calcolate dalla facade.
+    """Costruisce la QuantumProgramEntity di ingresso misurando il baseline con la facade.
 
-    Nessun numero inventato: gateCount/depth/qubit vengono dalla stessa sequenza
-    isolate_circuit -> get_abstract_metrics -> transpile_circuit -> get_physical_metrics usata
-    ovunque nella pipeline, non da valori hardcoded.
+    Nessun numero inventato: l, c e IdQ vengono da calculate_smell_metrics, la stessa misura che
+    QCEP persiste nel dataset e su cui ValidationService da' il verdetto.
     """
     source_code = _IDQ_SMELLY_PATH.read_text(encoding="utf-8")
 
-    qc = facade.isolate_circuit(source_code)
-    abstract_metrics = facade.get_abstract_metrics(qc)
-    transpiled_qc = facade.transpile_circuit(qc)
-    physical_metrics = facade.get_physical_metrics(transpiled_qc)
+    smell_metrics = facade.calculate_smell_metrics(source_code)
 
     baseline = CircuitVersion(
         source_code=source_code,
-        logical_qubits=qc.num_qubits,
-        abstract_metrics=CircuitMetrics(
-            gate_count=abstract_metrics["gateCount"], depth=abstract_metrics["depth"]
-        ),
-        physical_metrics=CircuitMetrics(
-            gate_count=physical_metrics["gateCount"], depth=physical_metrics["depth"]
+        smell_metrics=SmellMetrics(
+            max_ops_per_qubit=smell_metrics["longCircuit"]["maxOpsPerQubit"],
+            max_parallel_ops=smell_metrics["longCircuit"]["maxParallelOps"],
+            idle_qubits=smell_metrics["idleQubits"]["value"],
         ),
     )
     return QuantumProgramEntity(
@@ -94,16 +88,12 @@ def test_mas_engine_processes_idle_qubits_circuit_end_to_end() -> None:
     entity = _build_baseline_entity(facade)
     baseline = entity.get_baseline()
 
-    print(f"\n{_TAG} baseline logicalQubits={baseline.get_logical_qubits()}")
     print(
-        f"{_TAG} baseline abstractMetrics: "
-        f"gateCount={baseline.get_abstract_metrics().get_gate_count()}, "
-        f"depth={baseline.get_abstract_metrics().get_depth()}"
-    )
-    print(
-        f"{_TAG} baseline physicalMetrics: "
-        f"gateCount={baseline.get_physical_metrics().get_gate_count()}, "
-        f"depth={baseline.get_physical_metrics().get_depth()}"
+        f"\n{_TAG} baseline smellMetrics: "
+        f"l={baseline.get_smell_metrics().get_max_ops_per_qubit()}, "
+        f"c={baseline.get_smell_metrics().get_max_parallel_ops()}, "
+        f"l*c={baseline.get_smell_metrics().long_circuit}, "
+        f"IdQ={baseline.get_smell_metrics().get_idle_qubits()}"
     )
 
     result = mas_engine.process_entity(entity)
@@ -125,28 +115,12 @@ def test_mas_engine_processes_idle_qubits_circuit_end_to_end() -> None:
         print(f"\n{_TAG} --- REFACTORED (OPTIMIZED) ---")
         print(f"{_TAG} codice prodotto:\n{refactored.get_source_code()}")
         print(
-            f"{_TAG} logicalQubits: baseline={baseline.get_logical_qubits()} -> "
-            f"refactored={refactored.get_logical_qubits()}"
+            f"{_TAG} l*c: baseline={baseline.get_smell_metrics().long_circuit} -> "
+            f"refactored={refactored.get_smell_metrics().long_circuit}"
         )
         print(
-            f"{_TAG} abstractMetrics.gateCount: "
-            f"baseline={baseline.get_abstract_metrics().get_gate_count()} -> "
-            f"refactored={refactored.get_abstract_metrics().get_gate_count()}"
-        )
-        print(
-            f"{_TAG} abstractMetrics.depth: "
-            f"baseline={baseline.get_abstract_metrics().get_depth()} -> "
-            f"refactored={refactored.get_abstract_metrics().get_depth()}"
-        )
-        print(
-            f"{_TAG} physicalMetrics.gateCount: "
-            f"baseline={baseline.get_physical_metrics().get_gate_count()} -> "
-            f"refactored={refactored.get_physical_metrics().get_gate_count()}"
-        )
-        print(
-            f"{_TAG} physicalMetrics.depth: "
-            f"baseline={baseline.get_physical_metrics().get_depth()} -> "
-            f"refactored={refactored.get_physical_metrics().get_depth()}"
+            f"{_TAG} IdQ: baseline={baseline.get_smell_metrics().get_idle_qubits()} -> "
+            f"refactored={refactored.get_smell_metrics().get_idle_qubits()}"
         )
     elif status == EvaluationStatus.OPT_FAILED:
         print(

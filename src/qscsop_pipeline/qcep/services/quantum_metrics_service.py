@@ -8,13 +8,20 @@ from qscsop_pipeline.qcep.interfaces.i_quantum_metrics_service import IQuantumMe
 
 
 class QuantumMetricsService(IQuantumMetricsService):
-    """Valida un record grezzo e ne calcola le metriche baseline tramite IQiskitFacade."""
+    """Valida un record grezzo e ne misura gli smell baseline tramite IQiskitFacade."""
 
     def __init__(self, facade: IQiskitFacade) -> None:
         self._facade = facade
 
     def calculate_metrics(self, raw_record: dict) -> Optional[dict]:
-        """Valida sintassi e circuito, ritorna il record arricchito o None se va scartato."""
+        """Valida sintassi e circuito, ritorna il record arricchito o None se va scartato.
+
+        Il baseline porta ora la sola misura QSMELL. Le metriche di costo (gateCount/depth
+        astratte e fisiche, logicalQubits) sono uscite dal contratto: erano cieche ai refactoring
+        della pipeline e il loro unico consumatore era un KPI che valeva sempre zero -- vedi
+        docs/misura_metriche_fisiche_pre_rimozione.md. Con loro e' sparita la transpilazione, che
+        era l'operazione piu' costosa di questo servizio: calculate_smell_metrics non transpila.
+        """
         source_code = raw_record["sourceCode"]
 
         if not self._validate_syntax(source_code):
@@ -26,10 +33,7 @@ class QuantumMetricsService(IQuantumMetricsService):
         # romperebbe il generator a monte in QCEPMain, quindi la si cattura e si scarta il
         # record restituendo None, senza interrompere l'elaborazione degli elementi successivi.
         try:
-            qc = self._facade.isolate_circuit(source_code)
-            abstract_metrics = self._facade.get_abstract_metrics(qc)
-            transpiled_qc = self._facade.transpile_circuit(qc)
-            physical_metrics = self._facade.get_physical_metrics(transpiled_qc)
+            smell_metrics = self._facade.calculate_smell_metrics(source_code)
         except Exception:
             return None
 
@@ -38,9 +42,7 @@ class QuantumMetricsService(IQuantumMetricsService):
             "datasetSource": raw_record["datasetSource"],
             "baseline": {
                 "sourceCode": source_code,
-                "logicalQubits": qc.num_qubits,
-                "abstractMetrics": abstract_metrics,
-                "physicalMetrics": physical_metrics,
+                "smellMetrics": _to_baseline_metrics(smell_metrics),
             },
         }
 
@@ -55,3 +57,21 @@ class QuantumMetricsService(IQuantumMetricsService):
         except SyntaxError:
             return False
         return True
+
+
+def _to_baseline_metrics(smell_metrics: dict) -> dict:
+    """Traduce il payload della facade nella forma persistita del contratto dati.
+
+    La facade ritorna di piu' di quanto il record debba portare: gateError ed
+    errorFreeProbability sono la forma con cui il paper PRESENTA la metrica, non misure da
+    persistere, e worstQubit e' un puntatore dentro al circuito utile al momento della
+    riparazione (lo legge il MAS chiamando la facade), non una proprieta' del risultato.
+    Le chiavi qui sotto coincidono con SmellMetrics.to_dict(), che e' cio' che QSCSOP ricostruira'.
+    """
+    long_circuit = smell_metrics["longCircuit"]
+    return {
+        "maxOpsPerQubit": long_circuit["maxOpsPerQubit"],
+        "maxParallelOps": long_circuit["maxParallelOps"],
+        "longCircuit": long_circuit["value"],
+        "idleQubits": smell_metrics["idleQubits"]["value"],
+    }

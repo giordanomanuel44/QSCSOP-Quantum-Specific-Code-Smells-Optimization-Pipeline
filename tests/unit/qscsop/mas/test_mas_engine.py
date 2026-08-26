@@ -2,8 +2,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from qscsop_pipeline.qscsop.entities.circuit_metrics import CircuitMetrics
 from qscsop_pipeline.qscsop.entities.circuit_version import CircuitVersion
+from qscsop_pipeline.qscsop.entities.smell_metrics import SmellMetrics
 from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgramEntity
 from qscsop_pipeline.qscsop.mas.dto.failure_reason import FailureReason
@@ -17,19 +17,24 @@ from qscsop_pipeline.qscsop.mas.mas_engine import MASEngine
 
 BASELINE_CODE = "qc = QuantumCircuit(1)\nqc.h(0)\nqc.z(0)\nqc.h(0)\n"
 
+# Payload di calculate_smell_metrics, cioe' la forma su cui ValidationService ha appena dato il
+# verdetto: e' da li' che _build_refactored_version legge, senza rimisurare.
 NEW_METRICS = {
-    "logicalQubits": 1,
-    "abstractMetrics": {"gateCount": 1, "depth": 1},
-    "physicalMetrics": {"gateCount": 2, "depth": 2},
+    "longCircuit": {
+        "maxOpsPerQubit": 2,
+        "maxParallelOps": 3,
+        "value": 6,
+        "gateError": 0.00485,
+        "errorFreeProbability": 0.97,
+    },
+    "idleQubits": {"value": 0, "worstQubit": None},
 }
 
 
 def _make_entity() -> QuantumProgramEntity:
     baseline = CircuitVersion(
         source_code=BASELINE_CODE,
-        logical_qubits=1,
-        abstract_metrics=CircuitMetrics(gate_count=3, depth=3),
-        physical_metrics=CircuitMetrics(gate_count=5, depth=5),
+        smell_metrics=SmellMetrics(max_ops_per_qubit=3, max_parallel_ops=1, idle_qubits=0),
     )
     return QuantumProgramEntity(circuit_id="c1", dataset_source="ds1", baseline=baseline)
 
@@ -86,11 +91,11 @@ def test_process_entity_succeeds_on_first_attempt() -> None:
     refactored = result.get_refactored()
     assert refactored is not None
     assert refactored.get_source_code() == "qc.x(0)\n"
-    assert refactored.get_logical_qubits() == 1
-    assert refactored.get_abstract_metrics().get_gate_count() == 1
-    assert refactored.get_abstract_metrics().get_depth() == 1
-    assert refactored.get_physical_metrics().get_gate_count() == 2
-    assert refactored.get_physical_metrics().get_depth() == 2
+    # I due fattori sono letti dal payload validato; il prodotto e' derivato dall'entita'.
+    assert refactored.get_smell_metrics().get_max_ops_per_qubit() == 2
+    assert refactored.get_smell_metrics().get_max_parallel_ops() == 3
+    assert refactored.get_smell_metrics().get_idle_qubits() == 0
+    assert refactored.get_smell_metrics().long_circuit == 6
     collaborators["reviewer_agent"].review.assert_not_called()
 
 
@@ -105,9 +110,7 @@ def test_process_entity_fails_once_then_succeeds() -> None:
     invalid_result = ValidationResultDTO(
         is_valid=False, raw_error_data="non equivalente", new_metrics=None
     )
-    valid_result = ValidationResultDTO(
-        is_valid=True, raw_error_data=None, new_metrics=NEW_METRICS
-    )
+    valid_result = ValidationResultDTO(is_valid=True, raw_error_data=None, new_metrics=NEW_METRICS)
     collaborators["validation_service"].validate.side_effect = [invalid_result, valid_result]
     collaborators["reviewer_agent"].review.return_value = "correggi l'equivalenza"
     engine = MASEngine(max_iterations=3, **collaborators)
