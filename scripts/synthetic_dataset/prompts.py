@@ -30,15 +30,21 @@ seguire anche quando sbagliava i numeri (il lotto idq_long_wait ha prodotto bloc
 piu' measure_all finale in tutti e 10 i casi, cioe' esattamente la struttura richiesta). Le
 metriche le misura la facade a valle: l'etichetta e' una CONSEGUENZA, non una richiesta.
 
-I few-shot vengono dai circuiti reali di data/raw/, non da esempi costruiti per l'occasione. La
-base sono i 9 circuiti classificati affidabili da scripts/diagnostics/corpus_reliability_report.py
--- eseguibili senza ritocchi, deterministici, con un solo QuantumCircuit assegnato e senza
-blocchi compositi opachi. Sono mostrati come CODICE E BASTA: niente matrice disegnata, niente
-valori di l/c/IdQ accanto, niente spiegazione delle metriche. Al modello non servono per il
-compito che gli resta, e ogni riga in piu' e' superficie per allucinare.
+OTTO few-shot su dieci vengono dai circuiti reali di data/raw/: la base sono i 9 classificati
+affidabili da scripts/diagnostics/corpus_reliability_report.py -- eseguibili senza ritocchi,
+deterministici, con un solo QuantumCircuit assegnato e senza blocchi compositi opachi. Sono
+mostrati come CODICE E BASTA: niente matrice disegnata, niente valori di l/c/IdQ accanto, niente
+spiegazione delle metriche. Al modello non servono per il compito che gli resta, e ogni riga in
+piu' e' superficie per allucinare.
 
-UNA SOLA ECCEZIONE alla regola "solo circuiti che girano senza ritocchi", motivata accanto a
-_REAL_DEEP_CHAIN: e' l'unico esempio reale della forma profonda-e-stretta.
+I DUE RESTANTI (_DENSE_LAYERS, _DEEP_PAIR) li abbiamo COSTRUITI noi, e il commento accanto a
+_DENSE_LAYERS spiega perche': coprono la sola forma che ne' il corpus reale ne' il modello
+producono, cioe' un circuito grande con tutti i qubit occupati fino alla stessa colonna finale.
+Nel prompt la loro provenienza non e' dichiarata -- l'intestazione dei few-shot e' neutra e non
+afferma nulla su nessuno dei dieci.
+
+UNA ECCEZIONE alla regola "solo circuiti che girano senza ritocchi" fra i reali, motivata accanto
+a _REAL_DEEP_CHAIN: e' l'unico esempio reale della forma profonda-e-stretta.
 
 I lotti non vedono tutti gli stessi esempi: vedi build_batch_prompt.
 """
@@ -221,9 +227,66 @@ qc = QuantumCircuit(5)
 qc.ry(theta1, 4)
 """
 
+# ---------------------------------------------------------------------------------------------
+# I DUE ESEMPI COSTRUITI DA NOI. Non vengono da data/raw/: li abbiamo scritti noi, e questa e' la
+# sola coppia del modulo che non sia un circuito reale.
+#
+# PERCHE' ESISTONO. Il corpus reale non contiene un solo circuito con questa forma -- grande ma
+# con TUTTI i qubit occupati fino alla stessa colonna finale -- e nemmeno il modello la produce
+# spontaneamente: nel giro di generazione precedente 16 circuiti su 16 sopra la soglia portavano
+# anche attesa, senza eccezioni. Il meccanismo e' identificato: ogni circuito grande chiudeva con
+# measure_all(), che crea una colonna finale condivisa da tutti i qubit, e chiunque avesse finito
+# prima restava fermo ad aspettarla. Produrre questa forma richiede di ragionare sul packing ASAP,
+# che il modello non sa fare; mostrargliela gia' fatta si'.
+#
+# I valori accanto sono MISURATI con QiskitFacade.calculate_smell_metrics, non stimati, e sono
+# fissati da un test (test_the_two_constructed_examples_have_the_shape_they_are_there_for): se
+# qualcuno li ritocca e perdono la forma, l'unica ragione per cui esistono sparisce in silenzio.
+#
+# Nel PROMPT non compare nulla sulla loro provenienza: l'intestazione dei few-shot e' neutra, non
+# dichiara ne' "reali" ne' "costruiti". Questi commenti non entrano mai nel prompt.
+
+# Misurato: l=5, c=5, l*c=25, IdQ=0, non inerte. Ogni qubit riceve un'operazione in OGNI colonna,
+# e le measure finali sono per-qubit: nessuno resta indietro ad aspettare una colonna condivisa.
+_DENSE_LAYERS = """from qiskit import QuantumCircuit
+from numpy import pi
+qc = QuantumCircuit(5, 5)
+for layer in range(2):
+    qc.cx(0, 1)
+    qc.cx(2, 3)
+    qc.h(4)
+    for q in range(5):
+        qc.p(pi / 4, q)
+for q in range(5):
+    qc.measure(q, q)
+"""
+
+# Misurato: l=11, c=2, l*c=22, IdQ=0, non inerte. La forma opposta: due soli qubit, catena lunga,
+# ma ENTRAMBI lavorano a ogni iterazione -- e' quello che tiene l'attesa a zero.
+_DEEP_PAIR = """from qiskit import QuantumCircuit
+from numpy import pi
+qc = QuantumCircuit(2, 2)
+for i in range(5):
+    qc.h(0)
+    qc.rz(pi / 3, 1)
+    qc.cx(0, 1)
+qc.measure(0, 0)
+qc.measure(1, 1)
+"""
+
+
 # Chiave -> (didascalia strutturale, codice). La didascalia dice cosa GUARDARE nell'esempio, in
 # termini di struttura del codice: nessun numero, nessuna metrica, nessun giudizio.
 _EXAMPLES: dict[str, tuple[str, str]] = {
+    "dense_layers": (
+        "every qubit receives a gate in every single layer, and each one is measured at the end "
+        "with no qubit ever pausing in between",
+        _DENSE_LAYERS,
+    ),
+    "deep_pair": (
+        "a long loop over just two qubits, with BOTH of them worked on every iteration",
+        _DEEP_PAIR,
+    ),
     "layered_entangling": (
         "layers across all qubits, then entangling gates between a few of them",
         _REAL_LAYERED_ENTANGLING,
@@ -260,39 +323,45 @@ _EXAMPLES: dict[str, tuple[str, str]] = {
 }
 
 
-_QISKIT_VERSION_RULES = """QISKIT VERSION
-The snippets run on Qiskit 2.x. The following were REMOVED from Qiskit and will crash on import \
-or on call -- never use them:
-- `execute(...)`, `qiskit.Aer`, `qiskit.providers.aer`, `qiskit.execute` (removed in Qiskit 1.0)
-- `qc.c_if(...)` and any classical-conditioned gate
-- `qc.bind_parameters(...)` (use `assign_parameters`)
-- `qiskit.circuit.library` shortcuts that build composite blocks (QFT, EfficientSU2, ...)
-Import only from `qiskit`, `qiskit.circuit` and `numpy`."""
+# Il preambolo obbligatorio sostituisce due regole della versione precedente che erano formulate
+# come DIVIETI ("un circuito costruito senza bit classici crasha", "ogni import dev'essere
+# presente") e che il modello ha violato 14 volte su 48. La diagnosi e' che una regola negativa
+# letta a meta' prompt perde contro un'istruzione positiva letta alla fine: un lotto intero (8 su
+# 8) e' morto proprio sulla regola dei bit classici, perche' la sua istruzione chiedeva una
+# measure per qubit e il modello ha raggiunto la forma sbagliata. Qui la stessa informazione e'
+# data come TEMPLATE DA COPIARE, che e' cio' che un modello sa seguire.
+#
+# Imporre un'unica forma di costruzione elimina per costruzione entrambi i guasti: i bit classici
+# ci sono sempre, e pi e' sempre importato.
+_MANDATORY_PREAMBLE = """MANDATORY PREAMBLE -- every snippet begins with exactly these three lines, in this order:
+
+    from qiskit import QuantumCircuit
+    from numpy import pi
+    qc = QuantumCircuit(<n>, <n>)
+
+Replace <n> with the number of qubits you want, and pass it TWICE. The second <n> creates the classical bits that `qc.measure(i, i)` writes into: a circuit built as `QuantumCircuit(n)` has none, and every measure on it crashes with 'Index 0 out of range for size 0'.
+Use no other import, and do not use QuantumRegister or ClassicalRegister -- `qc` is the only name you need. Always call the circuit `qc`."""
 
 
 _HARD_RULES = """HARD RULES (a snippet that breaks one is discarded)
 
-1. Assign EXACTLY ONE QuantumCircuit in the snippet. Helper sub-circuits assigned to their own \
-variable are forbidden: the pipeline measures the last circuit assigned, so a helper would be \
-measured instead of your circuit.
-2. If the snippet calls `qc.measure(...)` or `qc.measure_all(add_bits=False)`, the circuit MUST \
-own classical bits. Either `QuantumCircuit(n, n)` or an explicit `ClassicalRegister` passed to \
-the constructor. `QuantumCircuit(3)` followed by `qc.measure(0, 0)` CRASHES -- there is no \
-classical bit 0 to write into. If you do not want classical bits, use plain `qc.measure_all()` \
-(which adds its own) or no measurement at all.
-3. Every multi-qubit gate needs DISTINCT qubits. `qc.cx(q[0], q[i])` inside a loop starting at \
-i = 0 CRASHES on the first iteration with 'duplicate bit arguments'. Start such loops at 1, or \
-skip the coinciding index.
-4. Use only ELEMENTARY, FLAT gate calls: h, x, y, z, s, sdg, t, tdg, p, rx, ry, rz, u, sx, cx, \
-cy, cz, ch, cp, crx, cry, crz, swap, ccx, cswap, id, barrier, measure, reset. No composite or \
-library blocks, no `.to_gate()`, no `.control()`, no `.compose()` of another circuit.
-5. No randomness: no `random_circuit`, no unseeded numpy random. The snippet must build the \
-identical circuit on every run.
-6. The snippet must be COMPLETE and RUNNABLE on its own: every import present, no undefined \
-name, no placeholder comment standing in for code.
-7. Do not produce a circuit that is entirely inert from |0...0> (for example only controlled \
-gates whose controls never fire). Real computation is wanted, not an empty shell.
-8. Loops are welcome and encouraged: `for kk in range(n): qc.h(kk)` is how real code is written."""
+1. Assign EXACTLY ONE QuantumCircuit in the snippet. Helper sub-circuits assigned to their own variable are forbidden: the pipeline measures the last circuit assigned, so a helper would be measured instead of yours.
+2. Every two-qubit or three-qubit gate needs DIFFERENT indices. `qc.cx(0, i)` inside a loop starting at i = 0 crashes on the first iteration with 'duplicate bit arguments'. Start such loops at 1, or skip the coinciding index.
+3. Use only these gate calls: h, x, y, z, s, sdg, t, tdg, p, rx, ry, rz, u, sx, cx, cy, cz, ch, cp, crx, cry, crz, swap, ccx, cswap, id, barrier, measure. No composite or library blocks, no `.to_gate()`, no `.control()`, no `.compose()` of another circuit. These were REMOVED from Qiskit and crash: `execute(...)`, `qiskit.Aer`, `qiskit.providers.aer`, `qc.c_if(...)`, `qc.bind_parameters(...)`.
+4. No randomness: no `random_circuit`, no unseeded numpy random. The snippet must build the identical circuit on every run.
+5. The snippet must be COMPLETE and RUNNABLE: no undefined name, no placeholder comment standing in for code.
+6. Loops are welcome: `for q in range(n): qc.h(q)` is how real code is written."""
+
+
+# La checklist chiude il prompt, DOPO l'istruzione del lotto. E' deliberato: la causa comune di
+# tre guasti su cinque e' che l'ultima cosa letta pesa di piu' della regola letta prima, quindi
+# qui lo stesso effetto viene sfruttato a favore invece di subirlo. Le quattro voci sono i quattro
+# guasti misurati, non prudenza generica.
+_FINAL_CHECKLIST = """BEFORE YOU ANSWER, check every snippet one by one:
+- does it start with the three preamble lines, with the qubit count passed TWICE?
+- does every two- or three-qubit gate get DIFFERENT indices?
+- does every qubit you allocated receive at least one gate?
+- does at least one qubit get an `h` or an `x` BEFORE any controlled gate? A circuit made only of controlled gates starting from all-zero does nothing at all, because no control ever fires."""
 
 
 _OUTPUT_FORMAT_INSTRUCTIONS = """OUTPUT FORMAT
@@ -342,27 +411,31 @@ BATCH_THEMES: list[BatchTheme] = [
         qubit_range=(2, 3),
         instruction=(
             "Write circuits in which ONE qubit receives a long chain of gates, applied by a "
-            "loop of 20 to 30 iterations, while the other qubits also receive gates so that no "
-            "qubit is left allocated and untouched. Vary the gates that go into the chain "
-            "across iterations instead of repeating a single gate. End with a measure for each "
-            "qubit placed right after that qubit's own work. The real example below shows the "
-            "mechanism with a loop of 1000 iterations: copy the LOOP, not that number -- stay "
-            "between 20 and 30."
+            "loop of 8 to 12 iterations. Inside the loop body, apply EXACTLY ONE gate to that "
+            "chain qubit -- not two, not three -- plus one gate touching the other qubits, so "
+            "that none of them is left allocated and untouched. Vary which gate goes into the "
+            "chain across iterations instead of repeating a single one. Close with "
+            "`for q in range(n): qc.measure(q, q)` and never with `qc.measure_all()`."
         ),
-        example_keys=("deep_chain", "per_qubit_measure", "compact"),
+        example_keys=("deep_pair", "deep_chain", "per_qubit_measure"),
         count=8,
     ),
     BatchTheme(
         theme="wide_layers",
-        qubit_range=(6, 9),
+        qubit_range=(4, 7),
         instruction=(
-            "Write WIDE circuits: 6 to 9 qubits, every one of them receiving a gate in each of "
-            "3 to 5 successive rounds. Between the rounds, add entangling gates between "
-            "different pairs of qubits, changing which pairs each time. Every qubit must keep "
-            "receiving gates from the beginning to the end of the circuit -- none should stop "
-            "halfway and come back later. Finish with a measure for each qubit."
+            "Write circuits made of 3 to 5 successive LAYERS, where in every single layer EVERY "
+            "qubit receives exactly one gate. Build each layer by pairing up the qubits with an "
+            "entangling gate (cx, cz, swap) on different pairs each time, and giving a "
+            "single-qubit gate to any qubit left over -- then a full round of single-qubit "
+            "gates across all of them. The point of this batch is that NO qubit ever sits out: "
+            "every qubit works in every layer, from the first to the last, and none stops and "
+            "comes back later. Close with `for q in range(n): qc.measure(q, q)`. Never use "
+            "`qc.measure_all()` here: it makes every qubit that finished earlier wait for one "
+            "shared final step, which is exactly what this batch must avoid. The first two "
+            "reference circuits show this shape in its wide and its narrow form."
         ),
-        example_keys=("layered_entangling", "compact", "per_qubit_measure"),
+        example_keys=("dense_layers", "deep_pair", "layered_entangling"),
         count=8,
     ),
     BatchTheme(
@@ -383,12 +456,13 @@ BATCH_THEMES: list[BatchTheme] = [
         theme="disjoint_pauses",
         qubit_range=(4, 5),
         instruction=(
-            "Write SMALL circuits (no more than about ten gate calls in total) built out of "
-            "multi-qubit gates -- cx, cz, ccx, swap -- each acting on a DIFFERENT subset of the "
-            "qubits, so that between two gates touching the same qubit there are gates that do "
-            "not touch it at all. Do not use barriers here, and do not leave any allocated "
-            "qubit completely untouched. The circuits in this batch must stay small: this is "
-            "about the ORDER of the gates, not the size."
+            "Open with an `h` or an `x` on two or three of the qubits, so that the controlled "
+            "gates that follow actually fire. Then write the body out of multi-qubit gates -- "
+            "cx, cz, ccx, swap -- each acting on a DIFFERENT subset of the qubits, so that "
+            "between two gates touching the same qubit there are gates that do not touch it at "
+            "all. Keep the whole snippet under about twelve gate calls, use no barriers, and "
+            "leave no allocated qubit untouched. This batch is about the ORDER of the gates, "
+            "not the size: the circuits must stay small."
         ),
         example_keys=("disjoint_subsets", "compact", "layered_entangling"),
         count=8,
@@ -435,12 +509,23 @@ def _examples_block(theme: BatchTheme) -> str:
 
 
 def build_batch_prompt(theme: BatchTheme) -> str:
-    """Assembla il prompt completo (regole Qiskit + vincoli + few-shot + struttura richiesta).
+    """Assembla il prompt completo (preambolo + vincoli + few-shot + struttura + checklist).
 
-    I few-shot NON sono gli stessi per tutti i lotti: sono nove circuiti reali con strutture
-    molto diverse, e mostrarli tutti a ogni lotto significherebbe annegare quello pertinente. Ogni
-    lotto vede i tre o quattro piu' vicini alla struttura che deve produrre, nell'ordine dichiarato
-    in example_keys.
+    I few-shot NON sono gli stessi per tutti i lotti: sono dieci circuiti con strutture molto
+    diverse, e mostrarli tutti a ogni lotto significherebbe annegare quello pertinente. Ogni lotto
+    vede i tre o quattro piu' vicini alla struttura che deve produrre, nell'ordine dichiarato in
+    example_keys.
+
+    L'ORDINE DELLE SEZIONI E' PARTE DEL PROGETTO. L'istruzione del lotto sta in fondo e la
+    checklist ancora piu' in fondo: nel giro precedente un lotto intero e' morto perche' la sua
+    istruzione (letta per ultima) chiedeva una measure per qubit e ha prevalso sulla regola dei
+    bit classici (letta a meta' prompt). La posizione pesa, quindi cio' che deve prevalere sta
+    alla fine.
+
+    L'intestazione dei few-shot non dichiara la provenienza dei circuiti: otto vengono da
+    data/raw/, due li abbiamo costruiti noi (vedi il commento accanto a _DENSE_LAYERS). Al modello
+    la distinzione non serve -- guarda la struttura, non l'origine -- e cosi' il prompt non
+    afferma nulla di falso.
     """
     minimum_qubits, maximum_qubits = theme.qubit_range
 
@@ -449,12 +534,11 @@ produce Python snippets that RUN. Nothing else is asked of you: do not analyse t
 not classify them, do not count anything about them, do not explain them. Working code, and that \
 is all.
 
-{_QISKIT_VERSION_RULES}
+{_MANDATORY_PREAMBLE}
 
 {_HARD_RULES}
 
-REAL EXAMPLES -- these are actual circuits mined from public repositories. Look at how they are \
-STRUCTURED; you are not asked to reproduce them.
+REFERENCE CIRCUITS -- look at how these are STRUCTURED; you are not asked to reproduce them.
 
 {_examples_block(theme)}
 
@@ -467,6 +551,8 @@ Generate exactly {theme.count} circuits. Every circuit in this batch must be STR
 DISTINCT from every other circuit in the same batch: do not repeat the same gate sequence with \
 only cosmetic changes (different qubit indices, different variable names, a different subset of \
 qubits touched by an otherwise identical block). Vary the gates, their order, the number of \
-qubits, and the way the circuit is put together. Do not copy the examples above.
+qubits, and the way the circuit is put together. Do not copy the reference circuits above.
+
+{_FINAL_CHECKLIST}
 
 {_OUTPUT_FORMAT_INSTRUCTIONS.format(count=theme.count)}"""

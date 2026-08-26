@@ -24,6 +24,7 @@ import re
 import pytest
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
+from qscsop_pipeline.qscsop.mas.detection_thresholds import LC_PRODUCT_CUTOFF
 from scripts.synthetic_dataset.prompts import (
     _EXAMPLES,
     BATCH_THEMES,
@@ -104,12 +105,49 @@ def test_the_generated_circuit_schema_asks_for_source_code_alone() -> None:
 @pytest.mark.unit
 @pytest.mark.parametrize("theme", BATCH_THEMES, ids=lambda t: t.theme)
 def test_the_prompt_carries_the_rules_derived_from_real_crashes(theme) -> None:
-    """Le due regole nate dai fallimenti misurati nel primo giro, non da prudenza generica.
-
-    Quattro circuiti su 55 sono morti per queste due cause: una measure su un circuito senza
-    bit classici, e un gate a due qubit con lo stesso indice due volte.
-    """
+    """Le regole nate dai fallimenti misurati, non da prudenza generica."""
     prompt = build_batch_prompt(theme)
 
     assert "duplicate bit arguments" in prompt
-    assert "QuantumCircuit(3)` followed by `qc.measure(0, 0)` CRASHES" in prompt
+    assert "Index 0 out of range for size 0" in prompt
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("theme", BATCH_THEMES, ids=lambda t: t.theme)
+def test_every_prompt_mandates_the_preamble_and_closes_with_the_checklist(theme) -> None:
+    """Le due leve della revisione: un template positivo, e la posizione finale che lo rinforza.
+
+    Il giro precedente ha perso 14 circuiti su 48 su due divieti formulati come tali (bit
+    classici mancanti, `pi` non importato). La diagnosi e' che una regola negativa letta a meta'
+    prompt perde contro l'istruzione del lotto letta alla fine -- un lotto intero, 8 su 8, e'
+    morto proprio cosi'. Da qui il template da copiare, e la checklist messa DOPO l'istruzione
+    per sfruttare la stessa posizione che prima remava contro.
+    """
+    prompt = build_batch_prompt(theme)
+
+    assert "from qiskit import QuantumCircuit\n    from numpy import pi" in prompt
+    assert "qc = QuantumCircuit(<n>, <n>)" in prompt
+
+    checklist = prompt.index("BEFORE YOU ANSWER")
+    assert checklist > prompt.index(theme.instruction[:60]), (
+        f"{theme.theme}: la checklist deve venire DOPO l'istruzione del lotto, non prima"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("key", ["dense_layers", "deep_pair"], ids=lambda k: k)
+def test_the_constructed_examples_have_the_shape_they_exist_for(
+    facade: QiskitFacade, key: str
+) -> None:
+    """I due esempi costruiti da noi devono misurare l*c >= soglia CON IdQ == 0.
+
+    E' l'unica ragione per cui non sono circuiti reali come gli altri otto: nel giro di
+    generazione precedente 16 circuiti su 16 sopra la soglia portavano anche attesa, e ne' il
+    corpus reale ne' il modello producono questa forma. Se un ritocco gliela facesse perdere,
+    resterebbero due esempi qualsiasi e il buco che devono coprire tornerebbe, in silenzio.
+    """
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        metrics = facade.calculate_smell_metrics(_EXAMPLES[key][1])
+
+    assert metrics["longCircuit"]["value"] >= LC_PRODUCT_CUTOFF
+    assert metrics["idleQubits"]["value"] == 0
