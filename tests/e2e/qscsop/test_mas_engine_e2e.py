@@ -70,7 +70,7 @@ def test_mas_engine_processes_idle_qubits_circuit_end_to_end() -> None:
     detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     facade = QiskitFacade()
-    detector = DetectorAgent(llm=detector_llm)
+    detector = DetectorAgent(llm=detector_llm, facade=QiskitFacade())
     refactorer = RefactorerAgent(llm=agent_llm)
     reviewer = ReviewerAgent(llm=agent_llm)
     validation_service = ValidationService(facade=facade)

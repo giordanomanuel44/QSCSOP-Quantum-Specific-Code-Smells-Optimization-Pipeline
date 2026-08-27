@@ -6,8 +6,14 @@ JsonlDatasetWriter, DatasetParserFactory) e le inietta in QCEPMain, poi lancia
 il ciclo ETL end-to-end.
 
 Uso (dalla root del progetto, con il venv attivo):
-    python scripts/run_qcep.py                # dataset reali -> dataset_pulito.jsonl
-    python scripts/run_qcep.py --synthetic    # dataset sintetico -> dataset_pulito_synthetic.jsonl
+    python scripts/run_qcep.py           # dataset sintetico -> dataset_pulito_synthetic.jsonl
+    python scripts/run_qcep.py --real    # Bugs4Q + TheSmellyEight -> dataset_pulito.jsonl
+
+Il SINTETICO e' il default perche' e' il dataset su cui si lavora abitualmente: il corpus reale
+ne fornisce solo 14 circuiti utilizzabili (gli altri 77 non girano senza ritocchi, vedi
+scripts/diagnostics/corpus_reliability_report.py), mentre il sintetico ne porta 72. Il corpus
+reale resta raggiungibile con --real e NON e' opzionale: la tesi confronta le due sorgenti, e
+MetricsCalculator._metriche_per_dataset_source calcola i tassi separatamente per ciascuna.
 
 I due esperimenti scrivono su file distinti di proposito: JsonlDatasetWriter appende, quindi
 un output condiviso mescolerebbe circuiti reali e sintetici a ogni riesecuzione.
@@ -36,14 +42,14 @@ SYNTHETIC_DATASETS = ["synthetic"]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--synthetic",
+        "--real",
         action="store_true",
-        help="Elabora il dataset sintetico verificato invece di Bugs4Q/TheSmellyEight.",
+        help="Elabora Bugs4Q + TheSmellyEight invece del dataset sintetico verificato.",
     )
     args = parser.parse_args()
 
-    dataset_names = SYNTHETIC_DATASETS if args.synthetic else DATASETS
-    output_path = SYNTHETIC_OUTPUT_PATH if args.synthetic else OUTPUT_PATH
+    dataset_names = DATASETS if args.real else SYNTHETIC_DATASETS
+    output_path = OUTPUT_PATH if args.real else SYNTHETIC_OUTPUT_PATH
 
     facade = QiskitFacade()
     metrics_service = QuantumMetricsService(facade=facade)

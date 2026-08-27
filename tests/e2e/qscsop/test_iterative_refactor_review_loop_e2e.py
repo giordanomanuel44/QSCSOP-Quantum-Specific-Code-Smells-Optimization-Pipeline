@@ -41,7 +41,7 @@ def test_review_feedback_guides_a_second_refactoring_attempt() -> None:
     detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     facade = QiskitFacade()
-    detector = DetectorAgent(llm=detector_llm)
+    detector = DetectorAgent(llm=detector_llm, facade=QiskitFacade())
     refactorer = RefactorerAgent(llm=agent_llm)
     reviewer = ReviewerAgent(llm=agent_llm)
     validation_service = ValidationService(facade=facade)

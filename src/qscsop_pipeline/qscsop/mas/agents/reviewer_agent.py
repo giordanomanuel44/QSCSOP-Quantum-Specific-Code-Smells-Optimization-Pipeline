@@ -53,28 +53,30 @@ original circuit exactly as it was.
 # Blocco iniettato quando il fallimento e' il nodo "Migliori?" (compilazione ed equivalenza
 # superate, ma nessuna metrica fisica migliorata rispetto alla baseline). Riconoscibile in modo
 # STRUTTURALE (ValidationResultDTO.new_metrics != None), non testuale: e' l'unico dei tre
-# fallimenti in cui il ValidationService calcola con successo le metriche del new_code prima di
-# respingerlo, vedi ValidationService._is_improvement.
+# fallimenti in cui il ValidationService misura con successo il new_code prima di respingerlo,
+# vedi ValidationService._is_improvement. I due CASE riflettono la forma del criterio Pareto
+# sulla coppia (l*c, IdQ): nessun miglioramento, oppure baratto fra i due smell.
 _METRICS_NOT_IMPROVED_HINT_SECTION = """
 ADDITIONAL HINT FOR THIS SPECIFIC FAILURE
 
 This error means the circuit compiled and remained functionally equivalent, but did not satisfy \
-the improvement criterion: EVERY metric (physical gate count, physical depth, logical qubit \
-count) must be less than or equal to the baseline, AND at least one must be strictly less. The \
-raw failure details above include the exact baseline and refactored values for all three \
-metrics -- read them carefully and determine which specific situation applies:
+the improvement criterion: of the TWO smell metrics -- l * c (circuit size) and IdQ (longest \
+wait) -- at least one must be STRICTLY lower than the baseline, and NEITHER may be higher. The \
+raw failure details above include the exact baseline and refactored values for both -- read them \
+and determine which situation applies:
 
-CASE 1 -- NO metric improved at all (all three equal, or worse, than baseline): the attempt was \
-too conservative and left the circuit essentially unchanged. Tell the next attempt it MUST make \
-a real, measurable structural change that removes or simplifies the reported anomaly.
+CASE 1 -- NEITHER metric improved (both equal to, or worse than, baseline): the attempt was too \
+conservative and left the circuit essentially unchanged. Tell the next attempt it MUST apply the \
+change the prescription asked for. Remind it that l * c falls ONLY when operations are removed \
+from EVERY qubit holding the maximum -- removing them from a qubit that is not at the maximum \
+leaves the metric exactly where it was.
 
-CASE 2 -- SOME metric(s) improved but at least one got WORSE than the baseline (a 'near miss'): \
-the previous attempt (shown above) was substantially rewritten in the right direction, but \
-regressed on one specific dimension. Identify EXACTLY which metric got worse by comparing the \
-numbers in the raw failure details. Tell the next attempt to KEEP the overall structure and \
-approach of the previous attempt (it was mostly correct), and fix SPECIFICALLY the regressed \
-dimension -- do not discard the previous attempt's approach and start over from the original \
-circuit.
+CASE 2 -- one metric improved but the OTHER got worse (the two smells were traded against each \
+other): almost always this is a wait that was filled with operations that made the busiest \
+qubit's chain longer, so IdQ fell but l * c rose. Tell the next attempt to KEEP its overall \
+approach (it was going in the right direction) and fix SPECIFICALLY the regression: fill the \
+wait on a qubit that is NOT at the maximum, or reorder instead of adding operations. Do not \
+discard the previous attempt and start over from the original circuit.
 """
 
 _TASK_DESCRIPTION_TEMPLATE = """A refactoring attempt on a Qiskit quantum circuit has just FAILED \

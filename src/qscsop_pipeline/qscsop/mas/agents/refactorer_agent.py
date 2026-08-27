@@ -29,54 +29,6 @@ class _RefactorSchema(BaseModel):
     refactored_code: str
 
 
-# Few-shot smelly -> fixed. Long Circuit e la coppia "storica" Idle Qubits sono il contenuto
-# integrale reale dei file del dataset TheSmellyEight (correzioni applicate dagli autori dello
-# studio); i due esempi ILLUSTRATIVI di Idle Qubits piu' sotto sono invece COSTRUITI ad hoc, per
-# insegnare la strategia corretta di rimozione del qubit (vedi docstring del modulo).
-_LC_SMELLY_EXAMPLE = """from qiskit import QuantumCircuit
-from numpy import pi
-
-qc = QuantumCircuit(1)
-
-
-qc.h(0)
-qc.z(0)
-qc.h(0)
-
-
-
-# ------------------------------------------------------------------------------
-
-from qiskit import transpile
-
-# Transpile
-qc = transpile(qc, basis_gates=['u1', 'u2', 'u3', 'rz', 'sx', 'x', 'cx', 'id'], optimization_level=0)
-
-# Draw
-"""
-
-_LC_FIXED_EXAMPLE = """from qiskit import QuantumCircuit
-from numpy import pi
-
-qc = QuantumCircuit(1)
-
-
-
-
-
-
-qc.x(0)
-
-# ------------------------------------------------------------------------------
-
-from qiskit import transpile
-
-# Transpile
-qc = transpile(qc, basis_gates=['u1', 'u2', 'u3', 'rz', 'sx', 'x', 'cx', 'id'], optimization_level=0)
-
-# Draw
-"""
-
 _IDQ_SMELLY_EXAMPLE = """from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
 from numpy import pi
 qreg_q = QuantumRegister(3, 'q')
@@ -147,27 +99,6 @@ qc = transpile(qc, basis_gates=['u1', 'u2', 'u3', 'rz', 'sx', 'x', 'cx', 'id'], 
 # Draw
 """
 
-# Esempio ILLUSTRATIVO (NON tratto dal dataset): insegna la strategia corretta per Idle Qubits,
-# cioe' RIMUOVERE il qubit inutile riducendo il numero di qubit dichiarati (3 -> 2), invece di
-# ridefinirlo come fa la "correzione" reale di idq-fixed.py.
-_IDQ_ILLUSTRATIVE_SMELLY_EXAMPLE = """from qiskit import QuantumCircuit
-
-qc = QuantumCircuit(3)
-qc.h(0)
-qc.cx(0, 1)
-qc.h(2)
-qc.h(2)
-qc.measure_all()
-"""
-
-_IDQ_ILLUSTRATIVE_FIXED_EXAMPLE = """from qiskit import QuantumCircuit
-
-qc = QuantumCircuit(2)
-qc.h(0)
-qc.cx(0, 1)
-qc.measure_all()
-"""
-
 # Blocco iniettato solo quando review_feedback non e' vuoto (iterazioni successive alla prima).
 _REVIEW_FEEDBACK_SECTION = """
 PREVIOUS ATTEMPT FEEDBACK
@@ -178,74 +109,38 @@ Specifically fix this problem in the new attempt, while still removing the origi
 keeping the circuit functionally equivalent to the input.
 """
 
-_TASK_DESCRIPTION_TEMPLATE = """You are refactoring a Qiskit quantum circuit to remove exactly TWO \
-Quantum Code Smells, and nothing else. You must preserve the circuit's exact behavior.
+_TASK_DESCRIPTION_TEMPLATE = """You are applying a repair to a Qiskit quantum circuit. The analysis has ALREADY been done for you and is given below: your job is to EXECUTE it, not to redo it. Do not look for problems the report does not mention, and do not second-guess the ones it does.
 
-HOW TO FIX EACH SMELL
-
-1. LONG CIRCUIT
-Identify redundant or algebraically simplifiable gate sequences (for example, an H-Z-H sequence \
-on the same qubit is exactly equivalent to a single X gate) and replace them with the shortest \
-equivalent form, preserving the exact behavior of the circuit.
-
-2. IDLE QUBITS
-Identify qubits that are allocated but never involved in any meaningful operation (or whose \
-effect is negligible). For the Idle Qubits smell, if a qubit does not contribute in any \
-observable way to the result, the correct fix is to REMOVE it entirely from the circuit \
-(reducing the number of declared qubits), NOT to modify its gates to give it a new purpose. \
-The number of qubits in the corrected circuit MAY be lower than in the original when this \
-happens, and that is expected.
-
-FIX EXAMPLES
-
-Example 1 -- LONG CIRCUIT (real correction applied by the authors of the study the dataset is \
-taken from), before:
-```python
-{lc_smelly}```
-after the fix:
-```python
-{lc_fixed}```
-
-Example 2 -- IDLE QUBITS. This is what a circuit with this smell looks like (from the dataset):
-```python
-{idq_smelly}```
-Note: the official correction from that study (shown here as a HISTORICAL REFERENCE only) does \
-NOT remove the useless qubit, it redefines it with a new behavior while keeping 3 qubits -- this \
-is NOT the strategy to follow for this task:
-```python
-{idq_fixed}```
-The CORRECT strategy for Idle Qubits (illustrative example, NOT taken from the original dataset), \
-before:
-```python
-{idq_illustrative_smelly}```
-after (the idle qubit is REMOVED and the qubit count is reduced from 3 to 2):
-```python
-{idq_illustrative_fixed}```
-Why: qubit 2 receives two consecutive H gates that cancel out (it returns exactly to its initial \
-|0> state), so it never contributes to the observable result -- it must be REMOVED from the \
-circuit (not redefined with new gates), reducing the number of declared qubits from 3 to 2 and \
-updating measure_all() accordingly.
-
-CIRCUIT TO REFACTOR NOW
+CIRCUIT TO REFACTOR
 ```python
 {code}```
 
-WHAT THE DETECTOR REPORTED ABOUT THIS CIRCUIT
+WHAT THE DETECTOR PRESCRIBED FOR THIS CIRCUIT
 {report_details}
 {review_feedback_section}
+HOW TO APPLY THE PRESCRIPTION
+
+- Change exactly what the prescription names, at the lines it names. Nothing else.
+- If the prescription says there is NO removable redundancy, return the circuit UNCHANGED. Do not invent a change to look productive: a circuit that is over the threshold purely because of its size cannot be brought under it without altering what it computes, and returning it intact is the correct answer.
+- Removing a qubit is NEVER the fix for a waiting qubit. A qubit that is never used at all does not wait between two of its own operations, so removing one does not reduce the wait -- it is the wait that must go, by reordering the operations or by filling it.
+- If you fill a wait, the operations you add must not make the busiest qubit's chain longer than it already is: that would make the circuit larger and the repair would be rejected even though the wait is gone.
+
+FIX EXAMPLE
+
+A circuit whose qubits are worked one at a time, so that each one sits idle while the others are used, before:
+```python
+{idq_smelly}```
+after the fix -- the SAME operations, reordered so that each qubit runs its own block and is measured immediately, with no waiting in between. Nothing was removed and no qubit was dropped:
+```python
+{idq_fixed}```
+
 EQUIVALENCE CONSTRAINT (non-negotiable)
 
-The refactored circuit MUST remain FUNCTIONALLY EQUIVALENT to the original on the qubits that \
-carry actual information: the fix concerns only structural efficiency (fewer/shorter gates, fewer \
-idle qubits). Removing a genuinely idle qubit -- one that never affects the observable result -- \
-is allowed and expected even though it reduces the qubit count. Apart from that, do not add, \
-remove or reorder anything that would change the computed state.
+The refactored circuit MUST remain FUNCTIONALLY EQUIVALENT to the original: the repair concerns only the structure, never what the circuit computes. Removing gates that genuinely cancel out is allowed because it preserves behaviour by definition. Apart from that, do not add, remove or reorder anything that would change the computed state.
 
 OUTPUT FORMAT
 
-Return ONLY the refactored Python code in the refactored_code field: pure Python source, exactly \
-as it would appear in a .py file. No Markdown code fences (no ```python), no explanatory text \
-before or after, no prose comments describing what you changed."""
+Return ONLY the refactored Python code in the refactored_code field: pure Python source, exactly as it would appear in a .py file. No Markdown code fences (no ```python), no explanatory text before or after, no prose comments describing what you changed."""
 
 _EXPECTED_OUTPUT = (
     "A structured object with a single field refactored_code containing ONLY the refactored "
@@ -293,12 +188,8 @@ class RefactorerAgent(IRefactorerAgent):
         )
         task = Task(
             description=_TASK_DESCRIPTION_TEMPLATE.format(
-                lc_smelly=_LC_SMELLY_EXAMPLE,
-                lc_fixed=_LC_FIXED_EXAMPLE,
                 idq_smelly=_IDQ_SMELLY_EXAMPLE,
                 idq_fixed=_IDQ_FIXED_EXAMPLE,
-                idq_illustrative_smelly=_IDQ_ILLUSTRATIVE_SMELLY_EXAMPLE,
-                idq_illustrative_fixed=_IDQ_ILLUSTRATIVE_FIXED_EXAMPLE,
                 code=code,
                 report_details=smell_report.get_report_details(),
                 review_feedback_section=review_feedback_section,

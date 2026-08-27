@@ -26,7 +26,7 @@ def test_refactorer_agent_fixes_long_circuit_preserving_equivalence() -> None:
     # DetectorAgent su DETECTOR_MODEL, RefactorerAgent su DEFAULT_AGENT_MODEL: vedi
     # qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato modelli diversi
     # per-agente.
-    detector = DetectorAgent(llm=LLM(model=DETECTOR_MODEL, temperature=0))
+    detector = DetectorAgent(llm=LLM(model=DETECTOR_MODEL, temperature=0, facade=QiskitFacade()))
     refactorer = RefactorerAgent(llm=LLM(model=DEFAULT_AGENT_MODEL, temperature=0))
     facade = QiskitFacade()
 
@@ -58,7 +58,7 @@ def test_refactorer_agent_fixes_idle_qubits_preserving_equivalence() -> None:
     # DetectorAgent su DETECTOR_MODEL, RefactorerAgent su DEFAULT_AGENT_MODEL: vedi
     # qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato modelli diversi
     # per-agente.
-    detector = DetectorAgent(llm=LLM(model=DETECTOR_MODEL, temperature=0))
+    detector = DetectorAgent(llm=LLM(model=DETECTOR_MODEL, temperature=0, facade=QiskitFacade()))
     refactorer = RefactorerAgent(llm=LLM(model=DEFAULT_AGENT_MODEL, temperature=0))
     facade = QiskitFacade()
 
@@ -75,7 +75,9 @@ def test_refactorer_agent_fixes_idle_qubits_preserving_equivalence() -> None:
     # ci si aspetta che il refattorizzato ne abbia meno. Stampato per verifica manuale.
     baseline_qubits = facade.isolate_circuit(baseline_code).num_qubits
     refactored_qubits = facade.isolate_circuit(refactored_code).num_qubits
-    print(f"[RefactorerAgent E2E IDQ] qubit baseline={baseline_qubits} refactored={refactored_qubits}")
+    print(
+        f"[RefactorerAgent E2E IDQ] qubit baseline={baseline_qubits} refactored={refactored_qubits}"
+    )
 
     # Controllo centrale: il refactoring deve preservare la semantica del circuito originale.
     assert facade.check_equivalence(baseline_code, refactored_code) is True

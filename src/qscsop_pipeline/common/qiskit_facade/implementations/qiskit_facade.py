@@ -289,12 +289,31 @@ class QiskitFacade(IQiskitFacade):
         "errorFreeProbability" e' la forma (1 - error)^(l*c) con cui il paper presenta la stessa
         metrica nelle tabelle. Le SOGLIE non compaiono qui: questa e' la misura, il confronto con
         una soglia e' politica di rilevamento e vive nel livello che decide (stessa separazione
-        gia' in atto fra calculate_metrics e ValidationService._is_improvement).
+        gia' in atto fra detection_thresholds e ValidationService._is_improvement).
+
+        "maxOpsQubits" e' un PUNTATORE, non una misura: gli indici dei qubit che realizzano il
+        massimo, cioe' gli unici da cui abbia senso rimuovere operazioni. Serve al DetectorAgent
+        per prescrivere una riparazione, e come worstQubit non viene mai persistito -- il
+        contratto dati (SmellMetrics) porta solo le misure. Sui 72 circuiti del dataset sintetico
+        il massimo e' condiviso da piu' di un qubit in 34 casi: e' una lista perche' togliere
+        operazioni da UNO SOLO dei qubit al massimo non abbassa l di un'unita'.
+
+        NON ESISTE LA SIMMETRICA PER LE COLONNE, ed e' deliberato. Tre ragioni misurate:
+        (1) sapere quali colonne realizzano c non aiuta a scegliere cosa rimuovere -- due
+        ridondanze sullo stesso qubit, una in colonna affollata e una scarica, danno lo stesso
+        risultato (l*c 24 -> 16 in entrambi i casi), perche' il packing ASAP richiude i buchi;
+        (2) l'unica leva DIRETTA su c e' serializzare con barrier, che a gate invariati porta
+        l*c da 8 a 6 preservando l'equivalenza: e' un "fix" peggiore dell'originale su hardware
+        reale, e non va mostrato al modello; (3) esporre l'intera matrice e' gia' stato provato
+        nella generazione sintetica ed e' fallito (degenerazione del modello sul disegno della
+        matrice). L'asimmetria e' strutturale: l si conta per riga e la rimozione agisce su una
+        riga, c e' una proprieta' emergente del packing che nessuno controlla direttamente.
         """
         circuit = self.isolate_circuit(code)
         matrix = self._execution_matrix(circuit)
 
-        max_ops_per_qubit = max((self._count_operations(row) for row in matrix), default=0)
+        ops_per_qubit = [self._count_operations(row) for row in matrix]
+        max_ops_per_qubit = max(ops_per_qubit, default=0)
         max_parallel_ops = max(
             (self._count_operations(column) for column in zip(*matrix)), default=0
         )
@@ -305,6 +324,11 @@ class QiskitFacade(IQiskitFacade):
             "longCircuit": {
                 "maxOpsPerQubit": max_ops_per_qubit,
                 "maxParallelOps": max_parallel_ops,
+                "maxOpsQubits": [
+                    index for index, count in enumerate(ops_per_qubit) if count == max_ops_per_qubit
+                ]
+                if max_ops_per_qubit
+                else [],
                 "value": product,
                 "gateError": self._MAX_GATE_ERROR,
                 "errorFreeProbability": (1 - self._MAX_GATE_ERROR) ** product,

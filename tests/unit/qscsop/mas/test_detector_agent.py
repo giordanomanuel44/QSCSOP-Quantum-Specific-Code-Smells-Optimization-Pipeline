@@ -1,189 +1,211 @@
-"""Unit test del DetectorAgent: mappatura output strutturato -> SmellReportDTO, con mock del Crew."""
+"""Unit test del DetectorAgent ibrido.
 
-from pathlib import Path
-from types import SimpleNamespace
+La facade e' MOCKATA (spec=IQiskitFacade), come nei test di ValidationService: qui si verifica
+la logica di decisione dell'agente -- chi decide cosa, quando l'LLM viene invocato e cosa vede --
+non il comportamento di Qiskit, gia' coperto dai test su QiskitFacade.
+
+I test sono stati riscritti insieme all'agente. Prima verificavano la mappatura di un verdetto
+prodotto dal MODELLO in SmellReportDTO; ora il verdetto non e' piu' del modello, e i test che
+contano sono due: che l'LLM non venga sfiorato su un circuito pulito, e che detected_smells
+derivi dalla misura e non da cio' che il modello scrive.
+"""
+
 from unittest.mock import Mock
 
 import pytest
 from crewai import BaseLLM
 
+from qscsop_pipeline.common.qiskit_facade.interfaces.i_qiskit_facade import IQiskitFacade
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import (
     DetectorAgent,
-    _SmellDetectionSchema,
+    _SmellPrescriptionSchema,
 )
+from qscsop_pipeline.qscsop.mas.detection_thresholds import IDLE_QUBITS_CUTOFF, LC_PRODUCT_CUTOFF
 from qscsop_pipeline.qscsop.mas.dto.quantum_smell_type import QuantumSmellType
-from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
 
 _SAMPLE_CODE = "qc.h(0)\nqc.z(0)\nqc.h(0)\n"
 
-# tests/unit/qscsop/mas/ -> risali a root repo, poi al file dell'esempio negativo (circuito corretto).
-_LC_FIXED_PATH = (
-    Path(__file__).resolve().parents[4] / "data" / "raw" / "thesmellyeight" / "lc" / "lc-fixed.py"
+
+def _metrics(*, lc: int, idq: int, max_ops: int = 7, max_parallel: int = 5, holders=(0,)) -> dict:
+    return {
+        "longCircuit": {
+            "maxOpsPerQubit": max_ops,
+            "maxParallelOps": max_parallel,
+            "maxOpsQubits": list(holders),
+            "value": lc,
+            "gateError": 0.00485,
+            "errorFreeProbability": 0.84,
+        },
+        "idleQubits": {"value": idq, "worstQubit": 0 if idq else None},
+    }
+
+
+def _make_agent(metrics: dict, mocker) -> DetectorAgent:
+    """DetectorAgent con facade mockata; Agent di CrewAI neutralizzato (mai istanziato davvero)."""
+    mocker.patch("qscsop_pipeline.qscsop.mas.agents.detector_agent.Agent")
+    facade = Mock(spec=IQiskitFacade)
+    facade.calculate_smell_metrics.return_value = metrics
+    return DetectorAgent(llm=Mock(spec=BaseLLM), facade=facade)
+
+
+# ------------------------------------------------------------------------------------------
+# Chi decide: le soglie sulla misura, non il modello.
+# ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_a_clean_circuit_never_reaches_the_llm(mocker) -> None:
+    """IL TEST CHE GIUSTIFICA IL DISEGNO IBRIDO.
+
+    Su un circuito pulito non c'e' nulla da prescrivere, quindi non c'e' motivo di pagare una
+    chiamata al modello: sul dataset sintetico sono 24 circuiti su 72. Il report e' generato
+    deterministicamente dai valori misurati, ed e' piu' informativo di una frase inventata.
+    """
+    agent = _make_agent(_metrics(lc=LC_PRODUCT_CUTOFF - 1, idq=IDLE_QUBITS_CUTOFF), mocker)
+    crew = mocker.patch.object(agent, "_run_prescription_crew")
+
+    report = agent.detect_smell(_SAMPLE_CODE)
+
+    assert report.get_has_smells() is False
+    assert report.get_detected_smells() == []
+    crew.assert_not_called()
+    assert str(LC_PRODUCT_CUTOFF - 1) in report.get_report_details()
+
+
+@pytest.mark.unit
+def test_detected_smells_comes_from_the_measurement_not_from_the_model(mocker) -> None:
+    """Il modello scrive una prescrizione, non un verdetto.
+
+    Qui la prescrizione non nomina alcuno smell: l'etichetta arriva comunque, perche' la
+    decidono le soglie. Un output del modello che contraddica la misura non e' rappresentabile.
+    """
+    agent = _make_agent(_metrics(lc=35, idq=3), mocker)
+    mocker.patch.object(
+        agent,
+        "_run_prescription_crew",
+        return_value=_SmellPrescriptionSchema(report_details="Rimuovi le righe 4 e 5."),
+    )
+
+    report = agent.detect_smell(_SAMPLE_CODE)
+
+    assert report.get_has_smells() is True
+    assert report.get_detected_smells() == [
+        QuantumSmellType.LONG_CIRCUIT.value,
+        QuantumSmellType.IDLE_QUBITS.value,
+    ]
+    assert report.get_report_details() == "Rimuovi le righe 4 e 5."
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("lc", "idq", "expected"),
+    [
+        (35, 0, [QuantumSmellType.LONG_CIRCUIT.value]),
+        (9, 3, [QuantumSmellType.IDLE_QUBITS.value]),
+        (
+            LC_PRODUCT_CUTOFF,
+            IDLE_QUBITS_CUTOFF + 1,
+            [QuantumSmellType.LONG_CIRCUIT.value, QuantumSmellType.IDLE_QUBITS.value],
+        ),
+    ],
+    ids=["solo_long_circuit", "solo_idle_qubits", "entrambi_esattamente_al_taglio"],
 )
+def test_each_threshold_drives_its_own_label(mocker, lc, idq, expected) -> None:
+    agent = _make_agent(_metrics(lc=lc, idq=idq), mocker)
+    mocker.patch.object(
+        agent,
+        "_run_prescription_crew",
+        return_value=_SmellPrescriptionSchema(report_details="..."),
+    )
+
+    assert agent.detect_smell(_SAMPLE_CODE).get_detected_smells() == expected
 
 
-def _make_agent() -> DetectorAgent:
-    """Costruisce un DetectorAgent con un LLM finto (l'LLM reale non viene mai usato nei mock)."""
-    return DetectorAgent(llm=Mock(spec=BaseLLM))
+# ------------------------------------------------------------------------------------------
+# Cosa vede il modello: i numeri esatti piu' il bersaglio gia' calcolato.
+# ------------------------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-def test_detect_smell_maps_positive_detection(mocker) -> None:
-    agent = _make_agent()
-    mocker.patch.object(
+def test_the_prompt_carries_the_qubits_holding_the_maximum(mocker) -> None:
+    """Senza questa lista la prescrizione e' inutile quasi una volta su due.
+
+    Togliere operazioni da un qubit che non e' al massimo non abbassa l: il massimo resta,
+    tenuto dagli altri. Sui 72 circuiti del dataset il massimo e' condiviso in 34 casi.
+    """
+    agent = _make_agent(
+        _metrics(lc=40, idq=0, max_ops=10, max_parallel=4, holders=(0, 2, 3)), mocker
+    )
+    crew = mocker.patch.object(
         agent,
-        "_run_detection_crew",
-        return_value=_SmellDetectionSchema(
-            line_by_line_expansion="h -> 0\nz -> 0\nh -> 0",
-            qubit_operation_analysis="q0: h, z, h",
-            detected_smell_types=[QuantumSmellType.LONG_CIRCUIT],
-            report_details="H-Z-H equivale a X: Long Circuit.",
-        ),
+        "_run_prescription_crew",
+        return_value=_SmellPrescriptionSchema(report_details="..."),
     )
 
-    result = agent.detect_smell(_SAMPLE_CODE)
+    agent.detect_smell(_SAMPLE_CODE)
 
-    assert isinstance(result, SmellReportDTO)
-    assert result.get_has_smells() is True
-    assert result.get_detected_smells() == ["long_circuit"]
-    assert result.get_report_details() == "H-Z-H equivale a X: Long Circuit."
+    measurements = crew.call_args.args[1]
+    assert "[0, 2, 3]" in measurements
 
 
 @pytest.mark.unit
-def test_detect_smell_maps_negative_detection(mocker) -> None:
-    agent = _make_agent()
-    mocker.patch.object(
+def test_the_prompt_carries_the_precomputed_target(mocker) -> None:
+    """Il bersaglio e' calcolato qui, non lasciato derivare al modello.
+
+    Con c = 4 serve l <= (20-1)//4 = 4, quindi da un qubit a l = 10 vanno tolte 6 operazioni.
+    E' l'aritmetica che il modello ha gia' sbagliato in passato, e qui e' esatta.
+    """
+    agent = _make_agent(_metrics(lc=40, idq=0, max_ops=10, max_parallel=4), mocker)
+    crew = mocker.patch.object(
         agent,
-        "_run_detection_crew",
-        return_value=_SmellDetectionSchema(
-            line_by_line_expansion="h -> 0\nz -> 0\nh -> 0",
-            qubit_operation_analysis="q0: h, z, h",
-            detected_smell_types=[],
-            report_details="",
-        ),
+        "_run_prescription_crew",
+        return_value=_SmellPrescriptionSchema(report_details="..."),
     )
 
-    result = agent.detect_smell(_SAMPLE_CODE)
+    agent.detect_smell(_SAMPLE_CODE)
 
-    assert isinstance(result, SmellReportDTO)
-    assert result.get_has_smells() is False
-    assert result.get_detected_smells() == []
-    assert result.get_report_details() == ""
+    measurements = crew.call_args.args[1]
+    assert "l must drop to 4 or below" in measurements
+    assert "6 operations must be removed" in measurements
 
 
 @pytest.mark.unit
-def test_detect_smell_maps_both_smell_types(mocker) -> None:
-    # Il modello puo' segnalare entrambi gli smell contemporaneamente: la lista li deve riportare
-    # tutti come stringhe semplici.
-    agent = _make_agent()
-    mocker.patch.object(
+def test_the_idle_qubit_pointer_is_passed_only_when_there_is_a_wait(mocker) -> None:
+    agent = _make_agent(_metrics(lc=35, idq=0), mocker)
+    crew = mocker.patch.object(
         agent,
-        "_run_detection_crew",
-        return_value=_SmellDetectionSchema(
-            line_by_line_expansion="h -> 0\nh -> 1\nh -> 2",
-            qubit_operation_analysis="q0..q2 analizzati",
-            detected_smell_types=[
-                QuantumSmellType.LONG_CIRCUIT,
-                QuantumSmellType.IDLE_QUBITS,
-            ],
-            report_details="Entrambi gli smell presenti.",
-        ),
+        "_run_prescription_crew",
+        return_value=_SmellPrescriptionSchema(report_details="..."),
     )
 
-    result = agent.detect_smell(_SAMPLE_CODE)
+    agent.detect_smell(_SAMPLE_CODE)
 
-    assert result.get_has_smells() is True
-    detected = result.get_detected_smells()
-    assert "long_circuit" in detected
-    assert "idle_qubits" in detected
+    assert "longest wait: q" not in crew.call_args.args[1]
 
 
 @pytest.mark.unit
-def test_detect_smell_propagates_parsing_failure(mocker) -> None:
-    agent = _make_agent()
+def test_the_measurement_is_taken_once_on_the_code_under_analysis(mocker) -> None:
+    agent = _make_agent(_metrics(lc=35, idq=3), mocker)
     mocker.patch.object(
         agent,
-        "_run_detection_crew",
-        side_effect=RuntimeError("output non conforme allo schema"),
+        "_run_prescription_crew",
+        return_value=_SmellPrescriptionSchema(report_details="..."),
     )
 
-    with pytest.raises(RuntimeError, match="output non conforme allo schema"):
+    agent.detect_smell(_SAMPLE_CODE)
+
+    agent._facade.calculate_smell_metrics.assert_called_once_with(_SAMPLE_CODE)
+
+
+@pytest.mark.unit
+def test_a_measurement_failure_is_not_swallowed(mocker) -> None:
+    """calculate_smell_metrics ESEGUE il sorgente e puo' fallire: il MASEngine ha gia' la sua
+    rete (process_entity cattura e produce uno stato terminale), quindi qui non si ingoia nulla.
+    """
+    mocker.patch("qscsop_pipeline.qscsop.mas.agents.detector_agent.Agent")
+    facade = Mock(spec=IQiskitFacade)
+    facade.calculate_smell_metrics.side_effect = ValueError("nessun QuantumCircuit assegnato")
+    agent = DetectorAgent(llm=Mock(spec=BaseLLM), facade=facade)
+
+    with pytest.raises(ValueError):
         agent.detect_smell(_SAMPLE_CODE)
-
-
-@pytest.mark.unit
-def test_detect_smell_invokes_crew_once_with_code(mocker) -> None:
-    agent = _make_agent()
-    run_mock = mocker.patch.object(
-        agent,
-        "_run_detection_crew",
-        return_value=_SmellDetectionSchema(
-            line_by_line_expansion="h -> 0\nz -> 0\nh -> 0",
-            qubit_operation_analysis="q0: h, z, h",
-            detected_smell_types=[],
-            report_details="",
-        ),
-    )
-
-    agent.detect_smell(_SAMPLE_CODE)
-
-    run_mock.assert_called_once_with(_SAMPLE_CODE)
-
-
-@pytest.mark.unit
-def test_task_prompt_includes_negative_lc_fixed_example(mocker) -> None:
-    # Verifica che il Task realmente costruito da _run_detection_crew contenga l'esempio
-    # negativo (lc-fixed.py): rende esplicito che il few-shot non e' piu' solo positivo.
-    agent = _make_agent()
-
-    captured: dict = {}
-
-    class _FakeCrew:
-        def __init__(self, agents, tasks, process) -> None:
-            captured["task"] = tasks[0]
-
-        def kickoff(self):
-            return SimpleNamespace(
-                pydantic=_SmellDetectionSchema(
-                    line_by_line_expansion="h -> 0\nz -> 0\nh -> 0",
-                    qubit_operation_analysis="q0: h, z, h",
-                    detected_smell_types=[],
-                    report_details="",
-                ),
-                raw="",
-            )
-
-    # Intercetta la creazione del Crew per catturare il Task senza chiamare un LLM reale.
-    mocker.patch("qscsop_pipeline.qscsop.mas.agents.detector_agent.Crew", _FakeCrew)
-
-    agent.detect_smell(_SAMPLE_CODE)
-
-    lc_fixed_content = _LC_FIXED_PATH.read_text(encoding="utf-8")
-    assert lc_fixed_content in captured["task"].description
-
-
-@pytest.mark.unit
-def test_reasoning_field_stays_internal_and_is_not_exposed_in_dto(mocker) -> None:
-    # Il chain-of-thought (qubit_operation_analysis) migliora il ragionamento interno del modello
-    # ma non deve trapelare nel DTO pubblico, che resta limitato a has_smells + report_details.
-    agent = _make_agent()
-    reasoning = "q0: h, p, z, s, measure -> usato; nessun qubit idle"
-    mocker.patch.object(
-        agent,
-        "_run_detection_crew",
-        return_value=_SmellDetectionSchema(
-            line_by_line_expansion="h -> 0\np -> 0\nz -> 0\ns -> 0\nmeasure -> 0",
-            qubit_operation_analysis=reasoning,
-            detected_smell_types=[],
-            report_details="Circuito pulito.",
-        ),
-    )
-
-    result = agent.detect_smell(_SAMPLE_CODE)
-
-    # Il DTO non deve avere alcun attributo/campo che contenga il ragionamento interno.
-    assert not hasattr(result, "qubit_operation_analysis")
-    assert not hasattr(result, "get_qubit_operation_analysis")
-    assert reasoning not in result.get_report_details()
-    assert result.get_report_details() == "Circuito pulito."
-    assert result.get_has_smells() is False

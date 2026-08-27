@@ -34,7 +34,7 @@ def test_reviewer_agent_contextualizes_a_real_validation_failure() -> None:
     # per-agente.
     detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
-    detector = DetectorAgent(llm=detector_llm)
+    detector = DetectorAgent(llm=detector_llm, facade=QiskitFacade())
     refactorer = RefactorerAgent(llm=agent_llm)
     reviewer = ReviewerAgent(llm=agent_llm)
     facade = QiskitFacade()

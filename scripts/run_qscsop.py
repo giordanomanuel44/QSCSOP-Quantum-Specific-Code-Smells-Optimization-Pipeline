@@ -69,15 +69,16 @@ if __name__ == "__main__":
 
     facade = QiskitFacade()
 
-    # DetectorAgent su un modello piu' grande (DETECTOR_MODEL): richiede un giudizio di
-    # classificazione corretto al primo colpo, dove RefactorerAgent/ReviewerAgent tollerano
-    # meglio l'approssimazione essendo corretti dal ciclo iterativo di validazione/review. Vedi
+    # DetectorAgent su un modello piu' grande (DETECTOR_MODEL): non classifica piu' -- lo fanno
+    # la facade e le soglie -- ma deve PRESCRIVERE quali operazioni cambiare, che e' il compito
+    # di lettura del codice piu' difficile dei tre. RefactorerAgent e ReviewerAgent tollerano
+    # meglio l'approssimazione, essendo corretti dal ciclo iterativo di validazione/review. Vedi
     # qscsop_pipeline/qscsop/mas/llm_config.py
     detector_llm = LLM(model=DETECTOR_MODEL, temperature=0.6)
     # Una singola istanza per ReviewerAgent.
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0.6)
 
-    detector_agent = DetectorAgent(llm=detector_llm)
+    detector_agent = DetectorAgent(llm=detector_llm, facade=facade)
     refactorer_agent = RefactorerAgent(llm=detector_llm)
     reviewer_agent = ReviewerAgent(llm=agent_llm)
     validation_service = ValidationService(facade=facade)

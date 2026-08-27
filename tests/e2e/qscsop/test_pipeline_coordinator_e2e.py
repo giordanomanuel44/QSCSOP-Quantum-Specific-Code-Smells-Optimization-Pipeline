@@ -1,4 +1,3 @@
-
 """E2E BOUNDED di PipelineCoordinator con tutti i collaboratori reali. MAI in CI.
 
 A differenza di test_mas_engine_e2e.py (che esercita MASEngine.process_entity() su una singola
@@ -54,9 +53,7 @@ _VALID_TERMINAL_STATUSES = {
 @pytest.mark.e2e
 def test_pipeline_coordinator_processes_two_real_records_end_to_end(tmp_path: Path) -> None:
     # Primi 2 record REALI del dataset gia' prodotto da QCEP, non circuiti fabbricati.
-    real_lines = _REAL_DATASET_PATH.read_text(encoding="utf-8").splitlines()[
-        :_BOUNDED_RECORD_COUNT
-    ]
+    real_lines = _REAL_DATASET_PATH.read_text(encoding="utf-8").splitlines()[:_BOUNDED_RECORD_COUNT]
     input_path = tmp_path / "dataset_pulito_bounded.jsonl"
     input_path.write_text("\n".join(real_lines) + "\n", encoding="utf-8")
     output_path = tmp_path / "risultati_dataset_bounded.jsonl"
@@ -64,7 +61,7 @@ def test_pipeline_coordinator_processes_two_real_records_end_to_end(tmp_path: Pa
     facade = QiskitFacade()
     detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
-    detector_agent = DetectorAgent(llm=detector_llm)
+    detector_agent = DetectorAgent(llm=detector_llm, facade=QiskitFacade())
     refactorer_agent = RefactorerAgent(llm=agent_llm)
     reviewer_agent = ReviewerAgent(llm=agent_llm)
     validation_service = ValidationService(facade=facade)

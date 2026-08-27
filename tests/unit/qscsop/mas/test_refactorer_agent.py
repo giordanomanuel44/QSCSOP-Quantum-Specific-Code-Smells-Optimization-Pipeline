@@ -7,8 +7,8 @@ import pytest
 from crewai import BaseLLM
 
 from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import (
-    _IDQ_ILLUSTRATIVE_FIXED_EXAMPLE,
-    _IDQ_ILLUSTRATIVE_SMELLY_EXAMPLE,
+    _IDQ_FIXED_EXAMPLE,
+    _IDQ_SMELLY_EXAMPLE,
     RefactorerAgent,
     _RefactorSchema,
 )
@@ -89,10 +89,15 @@ def test_refactor_passes_empty_feedback_on_first_iteration(mocker) -> None:
 
 
 @pytest.mark.unit
-def test_task_prompt_teaches_idle_qubit_removal_with_constructed_example(mocker) -> None:
-    # Il few-shot Idle Qubits non deve piu' insegnare la strategia sbagliata (idq-fixed.py, che
-    # ridefinisce il qubit mantenendone 3): il Task deve contenere l'esempio COSTRUITO che rimuove
-    # il qubit idle riducendo il conteggio (3 -> 2), e l'istruzione esplicita di rimozione.
+def test_task_prompt_makes_the_agent_an_executor_not_an_analyst(mocker) -> None:
+    """Il RefactorerAgent non ri-diagnostica: applica la prescrizione del Detector.
+
+    Il suo prompt conteneva il ragionamento sulla ridondanza semantica, che ora vive nel
+    DetectorAgent: lasciarlo qui significherebbe due agenti che fanno la stessa analisi e
+    possono contraddirsi. Sono spariti anche tre few-shot su quattro, perche' misurati con la
+    facade insegnavano a riparare NON-smell (la coppia Long Circuit parte da l*c = 3, quella
+    illustrativa di Idle Qubits da IdQ = 0).
+    """
     agent = _make_agent()
 
     captured: dict = {}
@@ -111,13 +116,14 @@ def test_task_prompt_teaches_idle_qubit_removal_with_constructed_example(mocker)
     agent.refactor(_SAMPLE_CODE, _smell_report(), review_feedback="")
 
     description = captured["task"].description
-    # L'esempio costruito (prima e dopo) e' presente per intero.
-    assert _IDQ_ILLUSTRATIVE_SMELLY_EXAMPLE in description
-    assert _IDQ_ILLUSTRATIVE_FIXED_EXAMPLE in description
-    # idq-fixed.py resta ma solo come riferimento storico da NON seguire.
-    assert "HISTORICAL REFERENCE" in description
-    # Istruzione esplicita: rimuovere il qubit, il conteggio puo' calare.
-    assert "REMOVE it entirely" in description
+    # Resta l'unica coppia valida: stesse operazioni riordinate, IdQ 7 -> 0 misurato.
+    assert _IDQ_SMELLY_EXAMPLE in description
+    assert _IDQ_FIXED_EXAMPLE in description
+    # Il permesso di non fare nulla: senza, l'agente inventa una modifica per sembrare produttivo
+    # e il circuito smette di essere equivalente.
+    assert "return the circuit UNCHANGED" in description
+    # Rimuovere un qubit non e' mai il fix per un'attesa: un qubit mai usato ha IdQ = 0.
+    assert "Removing a qubit is NEVER the fix" in description
 
 
 @pytest.mark.unit

@@ -1,344 +1,335 @@
-"""DetectorAgent: primo agente del MAS, rileva Long Circuit e Idle Qubits via CrewAI.
+"""DetectorAgent: rilevamento IBRIDO di Long Circuit e Idle Qubits.
 
-Il prompt (definizioni, few-shot, istruzioni di formato) e' scritto in inglese: qwen2.5-coder
-e' un modello orientato al codice e reso in modo piu' affidabile su prompt tecnici in inglese;
-il report_details generato ne eredita la lingua. Scelta documentata anche in CLAUDE.md/report.
+LA FACADE MISURA E LE SOGLIE DECIDONO; L'LLM PRESCRIVE. E' il terzo assetto di questo agente e
+nasce da un fallimento documentato: alle versioni precedenti si chiedeva di CLASSIFICARE, cioe'
+in ultima analisi di contare operazioni su una matrice di esecuzione, e il modello non ne e'
+capace. Nella generazione sintetica, messo davanti allo stesso compito, ha riportato l = numero
+di qubit in 8 record su 8 e ha degenerato sul disegno della matrice bruciando venti minuti.
+
+Il compito e' quindi diviso secondo chi lo sa fare:
+
+  - `IQiskitFacade.calculate_smell_metrics` misura l, c, l*c e IdQ. Esatto per costruzione.
+  - `detection_thresholds` decide `has_smells` e `detected_smells`. Zero falsi negativi, che
+    erano il fallimento peggiore: un falso negativo esclude un circuito smelly dal ciclo di
+    ottimizzazione senza che nessuno se ne accorga.
+  - L'LLM riceve codice E numeri misurati, e produce il solo `report_details`: la PRESCRIZIONE
+    di cosa cambiare, che finisce testualmente nel prompt del RefactorerAgent.
+
+Su un circuito pulito l'LLM non viene invocato affatto.
+
+CONSEGUENZA SUL PROMPT. Sono spariti la sezione SMELL DEFINITIONS (definizioni semantiche
+abbandonate con l'allineamento a QSMELL: il suo esempio portante, H-Z-H, misura l*c = 3 ed e'
+PULITO), la sezione che distingueva i due smell in caso di gate che si cancellano (problema
+inesistente: con le definizioni metriche i due smell sono ortogonali per costruzione) e la
+REASONING PROCEDURE con line_by_line_expansion e qubit_operation_analysis, che era scaffolding
+per far contare le operazioni per qubit al modello -- lavoro che ora fa la facade, esatto.
+
+Il prompt e' in inglese, stessa scelta motivata degli altri agenti: i modelli coder sono piu'
+affidabili su prompt tecnici in inglese.
 """
 
 from crewai import Agent, BaseLLM, Crew, Process, Task
 from pydantic import BaseModel
 
+from qscsop_pipeline.common.qiskit_facade.interfaces.i_qiskit_facade import IQiskitFacade
+from qscsop_pipeline.qscsop.mas.detection_thresholds import (
+    IDLE_QUBITS_CUTOFF,
+    LC_PRODUCT_CUTOFF,
+    has_idle_qubits,
+    is_long_circuit,
+)
 from qscsop_pipeline.qscsop.mas.dto.quantum_smell_type import QuantumSmellType
 from qscsop_pipeline.qscsop.mas.dto.smell_report_dto import SmellReportDTO
 from qscsop_pipeline.qscsop.mas.interfaces.i_detector_agent import IDetectorAgent
 
 
-class _SmellDetectionSchema(BaseModel):
-    """Schema Pydantic interno: solo tramite per l'output strutturato di CrewAI (non esposto)."""
+class _SmellPrescriptionSchema(BaseModel):
+    """Schema Pydantic interno: un solo campo, la prescrizione.
 
-    # L'ordine dei campi conta: in generazione autoregressiva ogni campo e' condizionato solo su
-    # quelli che lo precedono, quindi l'ordine qui sotto e' l'ordine di ragionamento imposto al
-    # modello, non solo la forma dello schema.
-    # 1. line_by_line_expansion e' PRIMO: trascrizione MECCANICA (non un'analisi) di ogni riga di
-    #    codice in operazioni elementari "gate -> qubit_index", con le chiamate register-wide
-    #    espanse esplicitamente in una entry per qubit. Cambia il compito cognitivo richiesto al
-    #    modello da "inferisci quali qubit tocca questa riga" (fallito due volte, vedi
-    #    docs/report_qscsop_refactoring_equivalence.md) a "riscrivi meccanicamente cosa fa ogni
-    #    riga" -- lo scaffolding sta nella trascrizione stessa, non in una regola astratta. Campo
-    #    interno: non viene mai propagato in SmellReportDTO.
-    line_by_line_expansion: str
-    # 2. qubit_operation_analysis e' SECONDO cosi' il modello raggruppa per qubit SOLO a partire
-    #    dalla trascrizione appena prodotta (non tornando al codice originale), prima di impegnarsi
-    #    su qualunque verdetto. Campo interno: non viene mai propagato in SmellReportDTO.
-    qubit_operation_analysis: str
-    # 3. report_details e' TERZO: il modello articola qui la conclusione discorsiva (quale smell,
-    #    se presente, e perche') basandosi sull'analisi appena scritta, prima di dover scegliere i
-    #    valori formali della lista.
+    Le versioni precedenti chiedevano quattro campi, di cui tre erano impalcatura di
+    ragionamento e uno era il verdetto (detected_smell_types). Il verdetto ora non si chiede
+    piu': lo decidono le soglie sulla misura della facade, quindi non e' rappresentabile un
+    output del modello che contraddica la misura.
+    """
+
     report_details: str
-    # 4. detected_smell_types e' ULTIMO: deve limitarsi a formalizzare in valori vincolati di
-    #    QuantumSmellType la conclusione gia' articolata in report_details (lista vuota se nessuno
-    #    smell), non essere un giudizio indipendente. has_smells non e' chiesto separatamente, ma
-    #    DERIVATO da questa lista in detect_smell.
-    detected_smell_types: list[QuantumSmellType]
 
 
-# Few-shot POSITIVI (detected_smell_types non vuoto): contenuto integrale dei due esempi del
-# dataset TheSmellyEight, uno per smell in scope.
-_LC_SMELLY_EXAMPLE = """from qiskit import QuantumCircuit
-from numpy import pi
+# ---------------------------------------------------------------------------------------------
+# La regola meccanica, misurata. E' il contenuto centrale del prompt: senza, il modello prescrive
+# rimozioni che non spostano la metrica.
+# ---------------------------------------------------------------------------------------------
 
-qc = QuantumCircuit(1)
+_MECHANICS = f"""HOW THE TWO METRICS ACTUALLY MOVE
 
+LONG CIRCUIT is l * c, where l is the largest number of operations on any single qubit and c is \
+the largest number of operations happening in one time step. It is smelly at l * c >= \
+{LC_PRODUCT_CUTOFF}.
 
-qc.h(0)
-qc.z(0)
-qc.h(0)
+To bring l * c down you must bring **l** down. These are measured facts, not guidelines:
 
+- Removing operations lowers l. It does NOT reliably lower c: c only falls as a side effect when \
+the removal happens to compact the columns, and you cannot aim for it.
+- l falls ONLY if you remove operations from EVERY qubit that currently holds the maximum. \
+Removing from a qubit that is not at the maximum changes NOTHING: measured, a circuit at \
+(l=4, c=2, l*c=8) stays at exactly (4, 2, 8) after a genuine redundancy is removed from a \
+non-maximum qubit. The work is real and the metric does not move.
+- The same applies when several qubits share the maximum: removing from one of them alone leaves \
+l unchanged. You must remove from all of them.
 
+The list of qubits currently holding the maximum is given to you below. Use it.
 
-# ------------------------------------------------------------------------------
+IDLE QUBITS is the longest wait a qubit spends between two of its own operations. It is smelly \
+at IdQ > {IDLE_QUBITS_CUTOFF}. It is repaired by REORDERING or by filling the wait, never by \
+removing the qubit -- removing a qubit does not lower IdQ, and a qubit that is never used at all \
+has IdQ = 0 by definition.
 
-from qiskit import transpile
-
-# Transpile
-qc = transpile(qc, basis_gates=['u1', 'u2', 'u3', 'rz', 'sx', 'x', 'cx', 'id'], optimization_level=0)
-
-# Draw
-"""
-
-_IDQ_SMELLY_EXAMPLE = """from qiskit import QuantumRegister, ClassicalRegister, QuantumCircuit
-from numpy import pi
-qreg_q = QuantumRegister(3, 'q')
-creg_c = ClassicalRegister(3, 'c')
-qc = QuantumCircuit(qreg_q, creg_c)
-qc.h(qreg_q)
-
-qc.p(pi / 2, qreg_q[0])
-qc.z(qreg_q[0])
-qc.s(qreg_q[0])
-
-qc.barrier()
-
-qc.p(pi / 4, qreg_q[1])
-qc.z(qreg_q[1])
-qc.s(qreg_q[1])
-
-qc.barrier()
-qc.h(qreg_q[2])
-qc.p(pi / 8, qreg_q[2])
-qc.z(qreg_q[2])
-qc.s(qreg_q[2])
-qc.measure_all(add_bits=False)
+One constraint on filling a wait: the operations you add must NOT make the busiest qubit's chain \
+longer than it already is, otherwise l grows, l * c gets worse, and the refactoring is rejected \
+even though IdQ improved."""
 
 
-# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------
+# Few-shot. Nessuno inventato: sono i casi che abbiamo misurato, e i due centrali sono le
+# trappole -- senza, il modello produce prescrizioni oneste e inutili.
+# ---------------------------------------------------------------------------------------------
 
-from qiskit import transpile
+_EXAMPLES = """WORKED EXAMPLES
 
-# Transpile
-qc = transpile(qc, basis_gates=['u1', 'u2', 'u3', 'rz', 'sx', 'x', 'cx', 'id'], optimization_level=0)
-
-# Draw
-"""
-
-# Few-shot NEGATIVO (detected_smell_types vuoto): versione corretta reale dello stesso circuito
-# di _LC_SMELLY_EXAMPLE, per insegnare al modello a distinguere il "prima" dal "dopo" sullo stesso
-# caso ed evitare il bias verso il rilevamento indotto da soli esempi positivi.
-_LC_FIXED_EXAMPLE = """from qiskit import QuantumCircuit
-from numpy import pi
-
-qc = QuantumCircuit(1)
-
-
-
-
-
-
+Example 1 -- removal on the qubit that holds the maximum (this is what works)
+```python
+qc = QuantumCircuit(2)
 qc.x(0)
+qc.x(0)
+qc.h(0)
+qc.h(1)
+qc.cx(0, 1)
+```
+Measured l=4, c=2, l*c=8; the maximum is held by q0 alone. The two consecutive x on q0 cancel. \
+Removing them takes q0 from 4 operations to 2, so l becomes 2 and l*c becomes 4.
+Prescription: "Remove the two consecutive qc.x(0) calls (lines 2-3). They cancel out, and q0 is \
+the qubit holding l=4."
 
-# ------------------------------------------------------------------------------
+Example 2 -- removal on a qubit that is NOT at the maximum (this does nothing)
+```python
+qc = QuantumCircuit(2)
+qc.h(0)
+qc.x(0)
+qc.x(0)
+qc.h(1)
+qc.z(1)
+qc.s(1)
+qc.t(1)
+```
+Measured l=4, c=2, l*c=8; the maximum is held by q1, which has four operations. The two x on q0 \
+DO cancel, and removing them is a legitimate simplification -- but q0 only has three operations, \
+so l stays at 4 and l*c stays at 8. Measured before and after: identical.
+Prescription: "The redundancy on q0 (two consecutive qc.x(0)) does not affect the metric: q0 is \
+not at the maximum. l is held by q1, which carries no removable redundancy."
 
-from qiskit import transpile
+Example 3 -- the maximum is shared (remove from all of them, or from none)
+```python
+qc = QuantumCircuit(2)
+qc.x(0)
+qc.x(0)
+qc.h(0)
+qc.x(1)
+qc.x(1)
+qc.h(1)
+qc.cx(0, 1)
+```
+Measured l=4, c=2, l*c=8; the maximum is held by BOTH q0 and q1. Removing the cancelling pair \
+from q0 alone leaves l=4 and l*c=8, measured. Removing it from both brings l to 2 and l*c to 4.
+Prescription: "Remove the cancelling x pair from q0 (lines 2-3) AND the one from q1 (lines 5-6). \
+Both qubits hold l=4; removing from only one leaves the metric unchanged."
 
-# Transpile
-qc = transpile(qc, basis_gates=['u1', 'u2', 'u3', 'rz', 'sx', 'x', 'cx', 'id'], optimization_level=0)
-
-# Draw
+Example 4 -- no removable redundancy (say so)
+```python
+qc = QuantumCircuit(4, 4)
+for layer in range(3):
+    qc.cx(0, 1)
+    qc.cz(2, 3)
+    qc.h(0)
+    qc.x(1)
+    qc.y(2)
+    qc.z(3)
+    for q in range(4):
+        qc.p(pi / 4, q)
+for q in range(4):
+    qc.measure(q, q)
+```
+Measured l=10, c=4, l*c=40. Every gate is distinct and contributes; nothing cancels. Reaching \
+l * c < 20 would require l <= 4, that is removing 6 of the 10 operations from every qubit at the \
+maximum, which cannot be done while preserving the circuit's behaviour.
+Prescription: "No removable redundancy. Every operation contributes and nothing cancels; this \
+circuit is above the threshold by size alone and cannot be brought under it without changing \
+what it computes."
 """
 
-_TASK_DESCRIPTION_TEMPLATE = """You are analyzing a Qiskit quantum circuit for exactly TWO \
-Quantum Code Smells. Ignore any other issue.
 
-SMELL DEFINITIONS
+_TASK_DESCRIPTION_TEMPLATE = """You are prescribing a repair for a Qiskit quantum circuit that \
+has ALREADY been measured and classified. The classification is not your job and is not in \
+question: it was computed exactly, from the circuit's execution matrix. Your job is to say \
+WHAT TO CHANGE, precisely enough that another agent can apply it without re-analysing anything.
 
-1. LONG CIRCUIT
-The circuit contains redundant or algebraically simplifiable gate sequences that artificially \
-inflate gate count and depth without need. For example, an H-Z-H sequence applied to the same \
-qubit is equivalent to a single X gate, yet uses three operations instead of one. Look for: \
-gate sequences that cancel out or collapse into a shorter operation, unnecessary repetitions, \
-and operations that do not meaningfully contribute to the circuit's logic.
+{mechanics}
 
-2. IDLE QUBITS
-The circuit declares/allocates qubits that are never involved in any meaningful operation \
-(no gate and no measurement), or whose net effect on the final result is negligible \
-("wasted" qubits that occupy hardware resources without contributing to the computation).
+{examples}
 
-IMPORTANT: if the circuit contains NO measurement instruction at all, judge Idle Qubits ONLY \
-by whether a qubit receives ANY gate. A qubit that receives at least one gate (even a single \
-one) is NOT idle, regardless of whether the circuit ever measures it -- the absence of a \
-measurement is a property of the whole circuit, not evidence that a specific qubit is unused. \
-Only flag a qubit as idle if it receives literally zero gates.
-
-DISTINGUISHING LONG CIRCUIT FROM IDLE QUBITS WHEN GATES CANCEL:
-A cancellation of gates (like two H gates in a row) is not itself a smell label -- it is a fact \
-you must interpret. Ask what the cancellation RESULTS IN for that qubit:
-- If the redundant/cancelling gates leave the qubit STILL PARTICIPATING in the computation (it \
-is entangled with others, or its final state still carries information that affects the \
-outcome), and the redundancy is merely wasteful length that could be simplified to a shorter \
-equivalent sequence -- this is LONG CIRCUIT. The qubit stays useful; only the gate sequence is \
-unnecessarily long.
-- If the cancelling gates leave the qubit INERT -- returned to a fixed state (e.g. |0>) with no \
-superposition and no entanglement, so that its measurement outcome is deterministic and \
-contributes nothing to the computation -- this is IDLE QUBITS. The cancellation is not just \
-wasteful length; it is the REASON the qubit ends up doing nothing.
-Key question: after the cancellation, does the qubit still do useful work (Long Circuit) or is \
-it left contributing nothing (Idle Qubits)? A qubit whose gates cancel to the identity and is \
-then only followed by phase gates before a Z-basis measurement ends up deterministic and \
-non-contributing -- Idle Qubits.
-Note: the same circuit can in principle exhibit both smells on different qubits. Judge each \
-qubit on its own resulting role.
-
-EXAMPLES OF CIRCUITS WITH A SMELL (detected_smell_types is non-empty)
-
-Example A -- LONG CIRCUIT:
-```python
-{lc_example}```
-Why it is a smell: the sequence qc.h(0); qc.z(0); qc.h(0) on the same qubit is exactly \
-equivalent to a single X gate. Three operations are used where one suffices, inflating gate \
-count and depth for no benefit.
-
-Example B -- IDLE QUBITS:
-```python
-{idq_example}```
-Why it is a smell: qubit 2 receives TWO Hadamard gates in a row (qc.h(qreg_q) applies H to all \
-qubits including q2, then qc.h(qreg_q[2]) applies a second H to q2 specifically). Two \
-consecutive H gates on the same qubit cancel out exactly, leaving q2 in state |0> -- \
-deterministically, with no superposition. Every phase-type gate applied to q2 afterward (p, z, \
-s) acts on a state that is already |0>, so q2's measurement outcome is fixed and 100% \
-predictable: it carries zero information about the computation. This is what makes q2 an Idle \
-Qubit -- not merely that its phase gates are 'wasted' in isolation (that is true of phase gates \
-before a Z-basis measurement in general, on any qubit, smelly or not), but that q2's final \
-outcome is deterministic and uninformative because of the redundant double-Hadamard. \
-IMPORTANT DISTINCTION: 'deterministic outcome' alone is NOT the criterion for Idle Qubits. A \
-single meaningful gate (like a lone X, or any single non-self-cancelling gate) also produces a \
-deterministic outcome, yet it performs a real, non-trivial operation on the qubit -- it is NOT \
-idle. What makes q2 idle here is specifically that its net sequence of gates is EQUIVALENT TO \
-THE IDENTITY: two consecutive H gates cancel out exactly, so q2 ends up in exactly the same \
-state it started in, as if untouched. When judging Idle Qubits, ask: does this qubit's sequence \
-of gates, taken together, amount to doing NOTHING NET (a no-op, like H followed by H, or any \
-gate immediately undone by its own inverse) -- that is idle. A qubit receiving a single gate \
-that performs a real transformation (flips the state, rotates it into superposition, etc.) is \
-NEVER idle, even though its resulting state may be perfectly predictable.
-
-CONTRAST WITH EXAMPLE A/C: the X gate in Example C (the fixed version of Example A) is the \
-OPPOSITE case: a single, meaningful, non-cancelling gate. Do not confuse it with q2's \
-double-Hadamard case above -- a lone X gate is real work, not redundancy. If you find yourself \
-citing the double-Hadamard reasoning to justify flagging a DIFFERENT circuit that does not \
-itself contain two cancelling gates on the same qubit, you are misapplying the example: \
-re-check the actual gate sequence of the qubit you are judging, in the circuit under analysis, \
-not in a previous example.
-
-EXAMPLE OF A CLEAN CIRCUIT (detected_smell_types is empty)
-
-Example C -- SAME CIRCUIT FAMILY AS EXAMPLE A, AFTER THE SMELL WAS FIXED:
-```python
-{lc_fixed_example}```
-Why it is clean: this is the corrected version of Example A. The redundant H-Z-H sequence has \
-been replaced by the single equivalent X gate, so there is no redundancy left to simplify and \
-the one qubit is actively used. There is no remaining anomaly to report: detected_smell_types \
-must be an empty list. Do not flag a circuit as smelly just because earlier examples were smelly \
--- judge each circuit on its own merits.
-
-NOTE: the presence of phase-type gates (p, z, s) right before a measurement is NEVER by itself \
-evidence of Idle Qubits -- it is normal and appears in both smelly and correctly-fixed circuits \
-of this dataset. Judge Idle Qubits only by whether the qubit's final outcome is deterministic \
-due to redundancy, as explained above.
-
-CIRCUIT TO ANALYZE
+CIRCUIT TO REPAIR
 ```python
 {code}```
 
-REASONING PROCEDURE (fill line_by_line_expansion FIRST, then qubit_operation_analysis, before \
-deciding)
+MEASURED VALUES FOR THIS CIRCUIT (exact, do not recompute or second-guess them)
+{measurements}
 
-STEP 1 -- LINE-BY-LINE EXPANSION (fill line_by_line_expansion first): Go through the circuit \
-code ONE LINE AT A TIME, in order. For each line that applies a gate, write one explicit entry \
-of the form 'gate_name -> qubit_index'. CRITICAL RULE for register-wide calls: if a line applies \
-a gate to a whole register without an index (e.g. qc.h(qreg_q)), you MUST write ONE separate \
-entry for EACH qubit index in that register. Example transcription:
-  Code line 'qc.h(qreg_q)' with a 3-qubit register expands to:
-    h -> 0
-    h -> 1
-    h -> 2
-  Code line 'qc.h(qreg_q[2])' expands to:
-    h -> 2
-Do NOT skip, merge, or summarize lines. Transcribe every gate line literally and completely, \
-expanding every register-wide call into one entry per qubit. This expansion is a mechanical \
-transcription task, not an analysis -- just faithfully rewrite what each line does.
+WHAT TO WRITE
 
-STEP 2 -- PER-QUBIT GROUPING (fill qubit_operation_analysis): Using ONLY the expansion you just \
-produced in STEP 1 (not the original code), group the entries by qubit index and list, for each \
-qubit, its full ordered sequence of gates. Count how many times each gate appears per qubit -- \
-if a qubit shows the same gate twice in a row (e.g. two h entries), note that they may cancel. \
-If they cancel, DO NOT automatically label it Long Circuit: determine what the qubit does AFTER \
-the cancellation. If the qubit is left inert (back to |0>, only phase gates before a Z-basis \
-measurement, no entanglement, deterministic outcome), classify it as IDLE QUBITS, not Long \
-Circuit -- use the disambiguation rule in the smell definitions above. Then apply the Idle \
-Qubits / Long Circuit criteria as defined above. A qubit may be declared Idle ONLY if, after this \
-explicit grouping, it turns out to have zero meaningful operations. Do not infer that a qubit is \
-unused without having first listed its operations: if you find even a single gate or measurement \
-involving it, it is NOT an idle qubit.
+Write report_details: a precise, actionable prescription addressed to the agent that will edit \
+this code. It must name concrete lines and concrete operations, not general advice.
 
-Only after completing qubit_operation_analysis, write report_details: a concise technical \
-explanation of which smell(s) you found and where, or, if the circuit is clean, why it is clean. \
-THEN, as the very last step, populate detected_smell_types so that it EXACTLY MATCHES the \
-conclusion you just wrote in report_details: if report_details says the circuit is clean or that \
-no anomaly was found, detected_smell_types MUST be an empty list. If report_details describes a \
-Long Circuit, include "long_circuit". If it describes Idle Qubits, include "idle_qubits". Never \
-emit a detected_smell_types value that contradicts your own report_details -- the list is a \
-formalization of the verdict you just articulated, not an independent judgment. Respond ONLY \
-with the required structured object, with no extra text outside the requested format."""
+For LONG CIRCUIT, state: the target (which value of l brings l * c under the threshold), which \
+qubits hold the maximum, how many operations must go from each of them, and WHICH specific \
+operations are redundant, quoting the lines. Identifying the redundancy is the part only you can \
+do -- the measurement above cannot tell which gates cancel.
+
+For IDLE QUBITS, state: which qubit waits, between which two of its own operations the wait \
+falls, and what to do about it -- reorder so the wait disappears, or fill it -- without \
+lengthening the chain of the busiest qubit.
+
+IF THERE IS NOTHING TO REMOVE, SAY SO. A circuit can be over the threshold purely because of its \
+size, with every operation contributing and nothing cancelling. Reporting "no removable \
+redundancy" is a correct and useful answer: it tells the pipeline this circuit is not repairable \
+without changing its behaviour. Do NOT invent a redundancy to justify the classification you \
+were given -- a fabricated prescription makes the next agent produce a circuit that is no longer \
+equivalent to the original, and the failure gets attributed to it instead of to you.
+
+Respond ONLY with the required structured object, with no extra text outside it."""
+
 
 _EXPECTED_OUTPUT = (
-    "A structured object with four fields, in this order: line_by_line_expansion (mechanical "
-    "transcription of every gate line into 'gate_name -> qubit_index' entries, with "
-    "register-wide calls expanded into one entry per qubit), qubit_operation_analysis "
-    "(step-by-step listing of every qubit and the operations involving it, grouped from the "
-    "expansion above), report_details (string describing the detected smell(s) or why the "
-    "circuit is clean), and detected_smell_types (a list containing zero, one, or both of the "
-    'allowed values "long_circuit" and "idle_qubits", exactly matching the conclusion in '
-    "report_details)."
+    "A structured object with a single field, report_details: an actionable prescription naming "
+    "the concrete lines and operations to change, or an explicit statement that no removable "
+    "redundancy exists."
 )
 
 
 class DetectorAgent(IDetectorAgent):
-    """Rileva Long Circuit e Idle Qubits incapsulando un Agent CrewAI a output strutturato."""
+    """Misura con la facade, decide con le soglie, e fa prescrivere la riparazione all'LLM."""
 
-    def __init__(self, llm: BaseLLM) -> None:
+    def __init__(self, llm: BaseLLM, facade: IQiskitFacade) -> None:
+        self._facade = facade
         self._llm = llm
         self._agent = Agent(
-            role="Quantum Code Smell Detector",
+            role="Quantum Circuit Repair Planner",
             goal=(
-                "Detect whether a Qiskit circuit exhibits the Long Circuit or Idle Qubits "
-                "smell, and report the finding precisely."
+                "Given a circuit and its exact measured smell metrics, prescribe precisely which "
+                "operations to change so that the metrics fall below their thresholds."
             ),
             backstory=(
-                "You are a specialist in quantum circuit optimization who reviews Qiskit code "
-                "for two specific inefficiencies: redundant gate sequences (Long Circuit) and "
-                "allocated-but-unused qubits (Idle Qubits)."
+                "You are a specialist in quantum circuit optimization. You do not classify "
+                "circuits -- that is done exactly, by measurement, before you are called. You "
+                "read code and decide what to change, and you say plainly when nothing can be "
+                "changed without altering the circuit's behaviour."
             ),
             llm=llm,
             verbose=False,
         )
 
     def detect_smell(self, code: str) -> SmellReportDTO:
-        """Analizza code e mappa l'esito strutturato dell'agente in un SmellReportDTO."""
-        schema = self._run_detection_crew(code)
-        # has_smells e' DERIVATO dalla lista, non richiesto separatamente al modello: elimina per
-        # costruzione la possibilita' di una risposta internamente contraddittoria (es.
-        # has_smells=True con lista vuota, o viceversa).
-        has_smells = bool(schema.detected_smell_types)
-        detected_smells = [smell_type.value for smell_type in schema.detected_smell_types]
+        """Misura il circuito, decide con le soglie e prescrive solo se c'e' qualcosa da riparare.
+
+        L'LLM viene invocato SOLO sui circuiti smelly: su un circuito pulito non c'e' nulla da
+        prescrivere, e il report deterministico riporta i valori misurati con le rispettive
+        soglie -- piu' informativo di una frase generata, oltre che gratis.
+        """
+        metrics = self._facade.calculate_smell_metrics(code)
+        long_circuit, idle_qubits = metrics["longCircuit"], metrics["idleQubits"]
+
+        detected_smells = []
+        if is_long_circuit(long_circuit["value"]):
+            detected_smells.append(QuantumSmellType.LONG_CIRCUIT.value)
+        if has_idle_qubits(idle_qubits["value"]):
+            detected_smells.append(QuantumSmellType.IDLE_QUBITS.value)
+
+        if not detected_smells:
+            return SmellReportDTO(
+                has_smells=False,
+                report_details=_clean_report(long_circuit, idle_qubits),
+                detected_smells=[],
+            )
+
+        prescription = self._run_prescription_crew(
+            code, _format_measurements(long_circuit, idle_qubits, detected_smells)
+        )
         return SmellReportDTO(
-            has_smells=has_smells,
-            report_details=schema.report_details,
+            has_smells=True,
+            report_details=prescription.report_details,
             detected_smells=detected_smells,
         )
 
-    def _run_detection_crew(self, code: str) -> _SmellDetectionSchema:
-        """Esegue il Crew su code e ritorna l'output strutturato; isola la chiamata all'LLM.
+    def _run_prescription_crew(self, code: str, measurements: str) -> _SmellPrescriptionSchema:
+        """Esegue il Crew e ritorna l'output strutturato; isola la chiamata all'LLM.
 
-        Punto di mock nei test unitari: tutta la logica di mapping/validazione a valle passa
-        di qui, cosi' i test non istanziano mai un vero Agent/Crew/LLM.
+        Punto di mock nei test unitari: tutta la logica a valle passa di qui, cosi' i test non
+        istanziano mai un vero Agent/Crew/LLM.
         """
         task = Task(
             description=_TASK_DESCRIPTION_TEMPLATE.format(
-                lc_example=_LC_SMELLY_EXAMPLE,
-                idq_example=_IDQ_SMELLY_EXAMPLE,
-                lc_fixed_example=_LC_FIXED_EXAMPLE,
+                mechanics=_MECHANICS,
+                examples=_EXAMPLES,
                 code=code,
+                measurements=measurements,
             ),
             expected_output=_EXPECTED_OUTPUT,
             agent=self._agent,
-            output_pydantic=_SmellDetectionSchema,
+            output_pydantic=_SmellPrescriptionSchema,
         )
         crew = Crew(agents=[self._agent], tasks=[task], process=Process.sequential)
         result = crew.kickoff()
 
         parsed = result.pydantic
-        if not isinstance(parsed, _SmellDetectionSchema):
+        if not isinstance(parsed, _SmellPrescriptionSchema):
             raise RuntimeError(
-                "Il DetectorAgent non ha prodotto un output conforme a _SmellDetectionSchema. "
-                f"Output grezzo ricevuto dal modello: {result.raw!r}"
+                "Il DetectorAgent non ha prodotto un output conforme a "
+                f"_SmellPrescriptionSchema. Output grezzo ricevuto dal modello: {result.raw!r}"
             )
         return parsed
+
+
+def _format_measurements(long_circuit: dict, idle_qubits: dict, detected_smells: list) -> str:
+    """Compone il blocco di misure iniettato nel prompt.
+
+    Include il BERSAGLIO gia' calcolato (quale l porta l*c sotto soglia) invece di lasciarlo
+    derivare al modello: e' l'aritmetica che ha gia' sbagliato in passato, e qui e' esatta.
+    """
+    lines = [
+        f"- l (max operations on one qubit) = {long_circuit['maxOpsPerQubit']}",
+        f"- c (max operations in one time step) = {long_circuit['maxParallelOps']}",
+        f"- l * c = {long_circuit['value']}  (threshold: smelly at >= {LC_PRODUCT_CUTOFF})",
+        f"- qubits currently holding the maximum l: {long_circuit['maxOpsQubits']}",
+        f"- IdQ (longest wait) = {idle_qubits['value']}  "
+        f"(threshold: smelly at > {IDLE_QUBITS_CUTOFF})",
+    ]
+    if idle_qubits["worstQubit"] is not None:
+        lines.append(f"- qubit with the longest wait: q{idle_qubits['worstQubit']}")
+    lines.append(f"- classified as: {', '.join(detected_smells)}")
+
+    if QuantumSmellType.LONG_CIRCUIT.value in detected_smells:
+        parallel = long_circuit["maxParallelOps"]
+        target_l = (LC_PRODUCT_CUTOFF - 1) // parallel if parallel else 0
+        to_remove = max(long_circuit["maxOpsPerQubit"] - target_l, 0)
+        lines.append(
+            f"- TARGET: with c = {parallel}, l must drop to {target_l} or below, so {to_remove} "
+            f"operations must be removed from EACH qubit in {long_circuit['maxOpsQubits']}"
+        )
+    return "\n".join(lines)
+
+
+def _clean_report(long_circuit: dict, idle_qubits: dict) -> str:
+    """Report deterministico per i circuiti puliti: nessuna chiamata LLM."""
+    return (
+        f"No smell detected. l*c = {long_circuit['value']} "
+        f"(threshold {LC_PRODUCT_CUTOFF}), IdQ = {idle_qubits['value']} "
+        f"(threshold {IDLE_QUBITS_CUTOFF})."
+    )

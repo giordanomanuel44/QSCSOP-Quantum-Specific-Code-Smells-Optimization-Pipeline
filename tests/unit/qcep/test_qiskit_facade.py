@@ -650,3 +650,82 @@ qc.cx(0, 1)
 """
 
     assert facade.calculate_smell_metrics(parametric_source)["longCircuit"]["value"] == 4
+
+
+# ------------------------------------------------------------------------------------------
+# maxOpsQubits: il puntatore che dice DA DOVE rimuovere per abbassare l.
+# ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_max_ops_qubits_names_the_single_qubit_holding_the_maximum(facade: QiskitFacade) -> None:
+    code = (
+        "from qiskit import QuantumCircuit\n"
+        "qc = QuantumCircuit(2)\n"
+        "qc.x(0)\nqc.x(0)\nqc.h(0)\nqc.h(1)\nqc.cx(0, 1)\n"
+    )
+
+    long_circuit = facade.calculate_smell_metrics(code)["longCircuit"]
+
+    assert long_circuit["maxOpsPerQubit"] == 4
+    assert long_circuit["maxOpsQubits"] == [0]
+
+
+@pytest.mark.unit
+def test_max_ops_qubits_lists_every_qubit_when_the_maximum_is_shared(
+    facade: QiskitFacade,
+) -> None:
+    """E' UNA LISTA per una ragione operativa, non per generalita'.
+
+    Togliere operazioni da uno solo dei qubit che realizzano il massimo non abbassa l di
+    un'unita': il massimo resta, tenuto dagli altri. Sui 72 circuiti del dataset sintetico questo
+    caso ricorre in 34, quindi un singolo indice manderebbe il RefactorerAgent a fare lavoro
+    inutile quasi una volta su due.
+    """
+    code = (
+        "from qiskit import QuantumCircuit\n"
+        "qc = QuantumCircuit(2)\n"
+        "qc.x(0)\nqc.x(0)\nqc.h(0)\nqc.x(1)\nqc.x(1)\nqc.h(1)\nqc.cx(0, 1)\n"
+    )
+
+    long_circuit = facade.calculate_smell_metrics(code)["longCircuit"]
+
+    assert long_circuit["maxOpsPerQubit"] == 4
+    assert long_circuit["maxOpsQubits"] == [0, 1]
+
+
+@pytest.mark.unit
+def test_max_ops_qubits_is_empty_on_a_circuit_without_operations(facade: QiskitFacade) -> None:
+    code = "from qiskit import QuantumCircuit\nqc = QuantumCircuit(3)\n"
+
+    long_circuit = facade.calculate_smell_metrics(code)["longCircuit"]
+
+    assert long_circuit["maxOpsPerQubit"] == 0
+    assert long_circuit["maxOpsQubits"] == []
+
+
+@pytest.mark.unit
+def test_no_symmetric_pointer_exists_for_the_columns(facade: QiskitFacade) -> None:
+    """L'ASIMMETRIA E' UNA DECISIONE, non una svista: questo test la protegge.
+
+    Non esiste un "maxParallelColumns" perche' c non e' una leva. Le due misure che lo dicono
+    sono riprodotte qui sotto: rimuovere operazioni abbassa l e lascia c dov'era, mentre l'unico
+    modo di abbassare c deliberatamente e' serializzare con barrier -- stessi gate, zero
+    rimozioni, equivalenza preservata e metrica migliorata, cioe' esattamente il "fix" peggiore
+    dell'originale su hardware reale che il modello non deve imparare.
+    """
+    header = "from qiskit import QuantumCircuit\nqc = QuantumCircuit(4)\n"
+    dense = header + "qc.h(0)\nqc.h(1)\nqc.h(2)\nqc.h(3)\nqc.cx(0, 1)\nqc.cx(2, 3)\n"
+    serialised = header + (
+        "qc.h(0)\nqc.barrier()\nqc.h(1)\nqc.barrier()\nqc.h(2)\nqc.barrier()\nqc.h(3)\n"
+        "qc.cx(0, 1)\nqc.cx(2, 3)\n"
+    )
+
+    dense_metrics = facade.calculate_smell_metrics(dense)["longCircuit"]
+    serialised_metrics = facade.calculate_smell_metrics(serialised)["longCircuit"]
+
+    assert "maxParallelColumns" not in dense_metrics
+    # La serializzazione abbassa c -- e quindi l*c -- senza togliere un solo gate.
+    assert serialised_metrics["maxParallelOps"] < dense_metrics["maxParallelOps"]
+    assert serialised_metrics["value"] < dense_metrics["value"]
+    assert facade.check_equivalence(dense, serialised) is True
