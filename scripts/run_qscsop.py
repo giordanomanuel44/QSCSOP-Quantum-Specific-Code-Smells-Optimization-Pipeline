@@ -7,8 +7,9 @@ lancia il ciclo detect-refactor-validate-review end-to-end su ogni circuito del 
 di input.
 
 Uso (dalla root del progetto, con il venv attivo):
-    python scripts/run_qscsop.py           # sintetico -> risultati_dataset_synthetic.jsonl
-    python scripts/run_qscsop.py --real    # dataset_pulito.jsonl -> risultati_dataset.jsonl
+    python scripts/run_qscsop.py                    # sintetico -> risultati_dataset_synthetic.jsonl
+    python scripts/run_qscsop.py --real             # dataset_pulito.jsonl -> risultati_dataset.jsonl
+    python scripts/run_qscsop.py --trace log.txt    # con la traccia completa del ciclo su file
 
 IL DEFAULT E' IL SINTETICO, come in run_qcep.py: i due script vanno tenuti allineati, altrimenti
 senza flag lavorerebbero su dataset diversi e i risultati non corrisponderebbero all'input che si
@@ -59,6 +60,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Elabora il dataset reale prodotto da run_qcep.py --real.",
     )
+    parser.add_argument(
+        "--trace",
+        metavar="FILE",
+        help=(
+            "Scrive su FILE la tracciatura completa del ciclo per ogni circuito: prescrizione "
+            "del Detector, codice prodotto a ogni tentativo, esito della validazione e feedback "
+            "del Reviewer. Nessuno di questi testi finisce nel record dei risultati, quindi "
+            "senza questo file un fallimento NOT_EQUIVALENT non e' distinguibile fra "
+            "prescrizione sbagliata ed esecuzione sbagliata."
+        ),
+    )
     args = parser.parse_args()
 
     input_path = INPUT_PATH if args.real else SYNTHETIC_INPUT_PATH
@@ -69,6 +81,15 @@ if __name__ == "__main__":
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
     )
+    if args.trace:
+        # La traccia va su FILE a DEBUG, mentre la console resta a INFO: i testi sono lunghi
+        # (un codice refactored per tentativo) e renderebbero illeggibile l'avanzamento.
+        trace_handler = logging.FileHandler(args.trace, mode="w", encoding="utf-8")
+        trace_handler.setLevel(logging.DEBUG)
+        trace_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+        mas_logger = logging.getLogger("qscsop_pipeline.qscsop.mas.mas_engine")
+        mas_logger.setLevel(logging.DEBUG)
+        mas_logger.addHandler(trace_handler)
 
     facade = QiskitFacade()
 

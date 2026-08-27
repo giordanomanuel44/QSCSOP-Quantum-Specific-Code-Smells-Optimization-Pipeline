@@ -43,6 +43,7 @@ class MASEngine(IMASEngine):
         di sezione 1.4.4, gia' applicata in ValidationService).
         """
         baseline_code = entity.get_baseline().get_source_code()
+        circuit_id = entity.get_circuit_id()
         try:
             smell_report = self._detector_agent.detect_smell(baseline_code)
             entity.get_evaluation().set_detected_smells(smell_report.get_detected_smells())
@@ -51,14 +52,41 @@ class MASEngine(IMASEngine):
                 entity.get_evaluation().set_status(EvaluationStatus.SMELL_FREE)
                 return entity
 
+            # Tracciatura a DEBUG del ciclo. Nessuno di questi testi viene persistito nel record
+            # dei risultati -- EvaluationData porta solo l'esito -- quindi senza log non resta
+            # traccia di COSA il Detector abbia prescritto ne' di cosa il Refactorer abbia
+            # prodotto, e un fallimento diventa indistinguibile dall'altro: una prescrizione
+            # inventata e un'esecuzione sbagliata finiscono entrambe su NOT_EQUIVALENT.
+            logger.debug(
+                "[%s] PRESCRIZIONE (%s):\n%s",
+                circuit_id,
+                ", ".join(smell_report.get_detected_smells()),
+                smell_report.get_report_details(),
+            )
+
             review_feedback = ""
             while True:
                 entity.get_evaluation().increment_iteration_count()
+                iteration = entity.get_evaluation().get_iteration_count()
                 refactored_code = self._refactorer_agent.refactor(
                     baseline_code, smell_report, review_feedback
                 )
+                logger.debug(
+                    "[%s] TENTATIVO %s -- codice prodotto:\n%s",
+                    circuit_id,
+                    iteration,
+                    refactored_code,
+                )
                 validation_result = self._validation_service.validate(
                     baseline_code, refactored_code
+                )
+                logger.debug(
+                    "[%s] TENTATIVO %s -- esito: valido=%s motivo=%s\n%s",
+                    circuit_id,
+                    iteration,
+                    validation_result.get_is_valid(),
+                    getattr(validation_result.get_failure_reason(), "value", None),
+                    validation_result.get_raw_error_data() or "",
                 )
 
                 if validation_result.get_is_valid():
@@ -76,6 +104,7 @@ class MASEngine(IMASEngine):
                     review_feedback = self._reviewer_agent.review(
                         validation_result, smell_report, refactored_code
                     )
+                    logger.debug("[%s] FEEDBACK del Reviewer:\n%s", circuit_id, review_feedback)
                     continue
 
                 entity.get_evaluation().update_result(
@@ -84,10 +113,7 @@ class MASEngine(IMASEngine):
                 entity.get_evaluation().set_failure_reason(validation_result.get_failure_reason())
                 return entity
         except Exception:
-            logger.exception(
-                "Errore imprevisto durante process_entity per circuito %s",
-                entity.get_circuit_id(),
-            )
+            logger.exception("Errore imprevisto durante process_entity per circuito %s", circuit_id)
             entity.get_evaluation().update_result(
                 is_functionally_equivalent=False, status=EvaluationStatus.OPT_FAILED
             )
