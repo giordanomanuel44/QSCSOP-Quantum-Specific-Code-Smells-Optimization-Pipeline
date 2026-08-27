@@ -65,19 +65,11 @@ class MASEngine(IMASEngine):
                 smell_report.get_report_details(),
             )
 
-            # Terzo esito possibile, fra "nessuno smell" e il ciclo: lo smell c'e' ed e' misurato,
-            # ma il Detector dichiara che non esiste una riparazione che preservi il
-            # comportamento (circuito sopra soglia per sola dimensione). Entrare nel ciclo
-            # brucerebbe fino a sei chiamate LLM per arrivare comunque a OPT_FAILED, e il motivo
-            # registrato sarebbe fuorviante: sembrerebbe un tentativo fallito invece di un
-            # tentativo mai iniziato. iterationCount resta 0, che e' proprio cio' che distingue
-            # i due casi in fase di analisi.
-            if not smell_report.get_repairable():
-                entity.get_evaluation().update_result(
-                    is_functionally_equivalent=False, status=EvaluationStatus.OPT_FAILED
-                )
-                entity.get_evaluation().set_failure_reason(FailureReason.NOT_REPAIRABLE)
-                return entity
+            # Il verdetto di riparabilita' del Detector viene registrato nella tracciatura ma NON
+            # decide: il ciclo parte comunque. Quando lo usava per uscire subito, dei 33 circuiti
+            # dichiarati irriparabili 15 erano migliorabili e 5 erano portabili sotto soglia --
+            # cinque riparazioni perfette scartate senza un tentativo, contro un risparmio di
+            # chiamate LLM che non le valeva.
 
             review_feedback = ""
             while True:
@@ -117,7 +109,7 @@ class MASEngine(IMASEngine):
 
                 if entity.get_evaluation().get_iteration_count() < self._max_iterations:
                     review_feedback = self._reviewer_agent.review(
-                        validation_result, smell_report, refactored_code
+                        validation_result, smell_report, baseline_code, refactored_code
                     )
                     logger.debug("[%s] FEEDBACK del Reviewer:\n%s", circuit_id, review_feedback)
                     continue

@@ -298,15 +298,20 @@ class QiskitFacade(IQiskitFacade):
         il massimo e' condiviso da piu' di un qubit in 34 casi: e' una lista perche' togliere
         operazioni da UNO SOLO dei qubit al massimo non abbassa l di un'unita'.
 
-        "operationsPerQubit" e' la sequenza REALE di operazioni di ciascun qubit, una stringa per
-        riga della matrice, barrier esclusi. Esiste per chiudere un divario che ha prodotto
-        prescrizioni inventate: le metriche descrivono il circuito ESEGUITO (l = 21 operazioni),
-        ma il sorgente puo' costruirle con un for di 10 iterazioni su 8 righe. Ricevendo solo i
-        conteggi, il DetectorAgent immaginava uno srotolamento inesistente e citava righe che nel
-        file non c'erano ("remove lines 2-3 ... 24-25" su un sorgente di 8 righe). La sequenza
-        rende visibile cosa il circuito fa davvero, senza doverlo dedurre. Costa ~80 token sul
-        circuito piu' grande del dataset ed e' input esatto, non una trascrizione generata dal
-        modello -- che era il compito su cui aveva gia' fallito.
+        "timelinePerQubit" e' la riga della matrice di esecuzione di ciascun qubit resa come
+        stringa, con "_" sui passi in cui quel qubit non fa nulla. Esiste per chiudere un divario
+        che ha prodotto prescrizioni inventate: le metriche descrivono il circuito ESEGUITO
+        (l = 21 operazioni), ma il sorgente puo' costruirle con un for di 10 iterazioni su 8
+        righe. Ricevendo solo i conteggi, il DetectorAgent immaginava uno srotolamento inesistente
+        e citava righe che nel file non c'erano ("remove lines 2-3 ... 24-25" su un sorgente di 8
+        righe).
+
+        I "_" SONO LA PARTE CHE CONTA, e non c'erano nella prima versione. Sono il tempo fermo che
+        IdQ misura, e sono cio' che distingue due operazioni davvero consecutive da due separate
+        da un passo. Senza di essi la riga di un qubit che alterna operazione e attesa diventava
+        "cx, cx, cx", cioe' esattamente la forma che suggerisce una cancellazione: sui 48 circuiti
+        smelly del dataset l'appiattimento creava false adiacenze in 16 casi contro 3 con
+        adiacenze vere.
 
         NON ESISTE LA SIMMETRICA PER LE COLONNE, ed e' deliberato. Tre ragioni misurate:
         (1) sapere quali colonne realizzano c non aiuta a scegliere cosa rimuovere -- due
@@ -322,8 +327,7 @@ class QiskitFacade(IQiskitFacade):
         circuit = self.isolate_circuit(code)
         matrix = self._execution_matrix(circuit)
 
-        operation_names = [self._real_operations(row) for row in matrix]
-        ops_per_qubit = [len(names) for names in operation_names]
+        ops_per_qubit = [self._count_operations(row) for row in matrix]
         max_ops_per_qubit = max(ops_per_qubit, default=0)
         max_parallel_ops = max(
             (self._count_operations(column) for column in zip(*matrix)), default=0
@@ -340,7 +344,7 @@ class QiskitFacade(IQiskitFacade):
                 ]
                 if max_ops_per_qubit
                 else [],
-                "operationsPerQubit": [", ".join(names) for names in operation_names],
+                "timelinePerQubit": [self._timeline(row) for row in matrix],
                 "value": product,
                 "gateError": self._MAX_GATE_ERROR,
                 "errorFreeProbability": (1 - self._MAX_GATE_ERROR) ** product,
@@ -396,6 +400,35 @@ class QiskitFacade(IQiskitFacade):
     def _count_operations(cls, cells) -> int:
         """Quante celle sono occupate da un'operazione reale."""
         return len(cls._real_operations(cells))
+
+    @classmethod
+    def _timeline(cls, row: list[str]) -> str:
+        """La riga della matrice come stringa, con "_" sui passi in cui il qubit non fa nulla.
+
+                LE CELLE VUOTE NON SONO RIEMPITIVO: sono il tempo fermo che IdQ misura, e sono anche cio'
+                che distingue due operazioni davvero consecutive (che possono annullarsi) da due separate
+                da un passo (che non lo sono necessariamente). Una versione precedente le eliminava, e la
+                riga di un qubit che alterna operazione e attesa diventava "cx, cx, cx": sui 48 circuiti
+                smelly del dataset sintetico quell'appiattimento creava false adiacenze in 16 casi contro
+                3 con adiacenze vere, cioe' cinque volte piu' segnale falso che vero, e il DetectorAgent
+                prescriveva di cancellare coppie che non esistevano.
+
+        LE TRE CONVENZIONI SONO QUELLE DI _idle_qubits_metric, deliberatamente: le celle di barrier
+                si saltano (non sono ne' operazione ne' attesa), e le celle vuote prima della prima
+                operazione e dopo l'ultima non si contano -- un qubit non attende prima di iniziare ne'
+                dopo aver finito. Se questa riga usasse convenzioni diverse dalla metrica, mostrerebbe
+                attese che IdQ non conta e il modello leggerebbe un circuito che non e' quello misurato.
+        """
+        cells = [
+            "_" if not cell else cell
+            for cell in row
+            if not (cell and cell.lower().startswith("barrier"))
+        ]
+        while cells and cells[-1] == "_":
+            cells.pop()
+        while cells and cells[0] == "_":
+            cells.pop(0)
+        return ", ".join(cells)
 
     @staticmethod
     def _idle_qubits_metric(matrix: list[list[str]]) -> tuple[int, Optional[int]]:

@@ -16,12 +16,6 @@ class FailureReason(str, Enum):
     che una validazione sia mai stata tentata (es. durante detect_smell o refactor).
     """
 
-    # Il ciclo di refactoring non e' MAI stato tentato: il DetectorAgent ha dichiarato che il
-    # circuito non contiene nulla di rimovibile (sopra soglia per sola dimensione, ogni operazione
-    # contribuisce). Va distinto dagli altri tre, che descrivono un tentativo fallito: qui non
-    # c'e' stato tentativo, quindi iterationCount resta 0. Attenzione in fase di analisi: e' un
-    # giudizio del modello, mentre la stratificazione per riduzione richiesta e' calcolata.
-    NOT_REPAIRABLE = "not_repairable"
     COMPILATION_FAILED = "compilation_failed"
     NOT_EQUIVALENT = "not_equivalent"
     METRICS_NOT_IMPROVED = "metrics_not_improved"

@@ -29,14 +29,15 @@ class IQiskitFacade(ABC):
         """Isola code e ritorna le metriche Long Circuit e Idle Qubits secondo QSMELL.
 
         Forma: {"longCircuit": {"maxOpsPerQubit": int, "maxParallelOps": int,
-                                "maxOpsQubits": list[int], "operationsPerQubit": list[str],
+                                "maxOpsQubits": list[int], "timelinePerQubit": list[str],
                                 "value": int, "gateError": float,
                                 "errorFreeProbability": float},
                 "idleQubits": {"value": int, "worstQubit": Optional[int]}}.
 
-        maxOpsQubits, operationsPerQubit e worstQubit sono PUNTATORI dentro al circuito, utili al
+        maxOpsQubits, timelinePerQubit e worstQubit sono PUNTATORI dentro al circuito, utili al
         momento della riparazione, non misure da persistere: vedi il docstring
         dell'implementazione per la motivazione dell'asimmetria (nessuna chiave simmetrica per le
-        colonne) e per il ruolo di operationsPerQubit.
+        colonne) e per il ruolo di timelinePerQubit, che riporta anche i passi in cui un
+        qubit resta fermo ("_") e non solo le operazioni che esegue.
         """
         raise NotImplementedError

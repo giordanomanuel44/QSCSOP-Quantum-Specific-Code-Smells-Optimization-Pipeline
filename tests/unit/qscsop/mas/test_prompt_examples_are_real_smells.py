@@ -148,36 +148,81 @@ def test_the_detector_example_without_redundancy_is_really_unrepairable(
 
 
 @pytest.mark.unit
-def test_the_loop_based_examples_measure_what_the_prompt_claims(facade: QiskitFacade) -> None:
-    """Gli esempi 5 e 6: e' sul divario sorgente/eseguito che il modello sbagliava.
+def test_the_commutation_pair_of_examples_really_behaves_as_claimed(facade: QiskitFacade) -> None:
+    """GLI ESEMPI 5 E 6 SONO LA COPPIA CENTRALE DEL PROMPT: stessa forma, esito opposto.
 
-    Il 79% dei circuiti processati costruisce le proprie operazioni con un for. L'esempio 4 ha
-    dei loop ma non commenta mai il divario, e nessun esempio mostrava la sequenza eseguita: su
-    un sorgente di 8 righe che ne costruisce 21 operazioni il modello prescriveva di rimuovere
-    "lines 2-3 ... 24-25". Questi due rendono il divario esplicito, e i numeri che citano devono
-    essere quelli veri -- altrimenti il prompt insegna con dati falsi proprio l'aritmetica che il
-    modello ha gia' dimostrato di non saper fare.
+    Il prompt sostiene che `h, cx, h, cx, ...` non si riduce mentre `z, cx, z, cx, ...` collassa
+    quasi del tutto, e che nessuna adiacenza distingue i due casi. Se quell'affermazione fosse
+    falsa il prompt insegnerebbe la fisica sbagliata proprio dove il modello sbagliava: sul
+    dataset sintetico un `z, cx` dichiarato irriparabile era riducibile da l*c=34 a 2.
     """
     header = "from qiskit import QuantumCircuit\n"
-
-    # Esempio 5: nulla da rimuovere. 7 righe di sorgente, 21 operazioni su q0.
-    nothing_to_remove = header + (
-        "qc = QuantumCircuit(2, 2)\n"
-        "for i in range(10):\n    qc.h(0)\n    qc.cx(0, 1)\n"
+    non_commuta = header + (
+        "qc = QuantumCircuit(2, 2)\nfor i in range(10):\n    qc.h(0)\n    qc.cx(0, 1)\n"
         "qc.measure(0, 0)\nqc.measure(1, 1)\n"
     )
-    metrics = _measure(facade, nothing_to_remove)["longCircuit"]
-    assert len(nothing_to_remove.splitlines()) == 7
-    assert (metrics["maxOpsPerQubit"], metrics["maxParallelOps"], metrics["value"]) == (21, 2, 42)
-    assert is_long_circuit(metrics["value"])
-    # Nessuna coppia adiacente identica: e' cio' che rende il circuito irriparabile.
-    assert "h, h" not in metrics["operationsPerQubit"][0]
+    commuta = header + (
+        "qc = QuantumCircuit(2, 2)\nfor i in range(8):\n    qc.z(0)\n    qc.cx(0, 1)\n"
+        "qc.measure(0, 0)\nqc.measure(1, 1)\n"
+    )
+    solo_measure = header + "qc = QuantumCircuit(2, 2)\nqc.measure(0, 0)\nqc.measure(1, 1)\n"
 
-    # Esempio 6: la riparazione e' nel CORPO del loop, non a una riga inventata.
-    cancelling_pair = header + (
-        "qc = QuantumCircuit(2, 2)\n"
+    h_metrics = _measure(facade, non_commuta)["longCircuit"]
+    z_metrics = _measure(facade, commuta)["longCircuit"]
+
+    # I numeri citati nel testo dei due esempi.
+    assert (h_metrics["maxOpsPerQubit"], h_metrics["maxParallelOps"], h_metrics["value"]) == (
+        21,
+        2,
+        42,
+    )
+    assert (z_metrics["maxOpsPerQubit"], z_metrics["maxParallelOps"], z_metrics["value"]) == (
+        17,
+        2,
+        34,
+    )
+    assert is_long_circuit(h_metrics["value"]) and is_long_circuit(z_metrics["value"])
+
+    # Nessuna adiacenza distingue i due casi: e' il punto dell'accostamento.
+    assert "h, h" not in h_metrics["timelinePerQubit"][0]
+    assert "z, z" not in z_metrics["timelinePerQubit"][0]
+
+    # E l'esito e' opposto: il caso che commuta collassa alle sole measure, l'altro no.
+    assert facade.check_equivalence(commuta, solo_measure) is True
+    assert _measure(facade, solo_measure)["longCircuit"]["value"] == 2
+    assert facade.check_equivalence(non_commuta, solo_measure) is False
+
+
+@pytest.mark.unit
+def test_the_timeline_shows_the_idle_steps_the_examples_print(facade: QiskitFacade) -> None:
+    """Gli esempi 5 e 6 stampano la riga di q1 come `_, cx, _, cx`: dev'essere quella vera.
+
+    Nella prima versione la riga era appiattita in `cx, cx, cx` -- una falsa adiacenza che il
+    modello leggeva come otto coppie da cancellare. Se il prompt tornasse a mostrare quella
+    forma, insegnerebbe di nuovo l'errore che questi esempi esistono per correggere.
+    """
+    commuta = (
+        "from qiskit import QuantumCircuit\nqc = QuantumCircuit(2, 2)\n"
+        "for i in range(8):\n    qc.z(0)\n    qc.cx(0, 1)\n"
+        "qc.measure(0, 0)\nqc.measure(1, 1)\n"
+    )
+
+    timelines = _measure(facade, commuta)["longCircuit"]["timelinePerQubit"]
+
+    assert timelines[0].startswith("z, cx, z, cx")
+    assert timelines[1].startswith("cx, _, cx, _")
+    assert "cx, cx" not in timelines[1]
+
+
+@pytest.mark.unit
+def test_the_loop_body_example_really_carries_a_cancelling_pair(facade: QiskitFacade) -> None:
+    """Esempio 7: la riparazione e' nel CORPO del loop, non a una riga inventata."""
+    cancelling_pair = (
+        "from qiskit import QuantumCircuit\nqc = QuantumCircuit(2, 2)\n"
         "for i in range(12):\n    qc.x(0)\n    qc.x(0)\n    qc.cx(0, 1)\n"
         "qc.measure(0, 0)\nqc.measure(1, 1)\n"
     )
-    sequence = _measure(facade, cancelling_pair)["longCircuit"]["operationsPerQubit"][0]
-    assert sequence.startswith("x, x, cx, x, x, cx")
+
+    timeline = _measure(facade, cancelling_pair)["longCircuit"]["timelinePerQubit"][0]
+
+    assert timeline.startswith("x, x, cx, x, x, cx")

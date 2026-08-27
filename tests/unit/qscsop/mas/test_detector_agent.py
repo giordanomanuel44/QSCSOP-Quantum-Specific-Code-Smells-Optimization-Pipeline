@@ -33,14 +33,14 @@ def _metrics(
     max_ops: int = 7,
     max_parallel: int = 5,
     holders=(0,),
-    sequences=("h, cx, h, cx", "cx, cx"),
+    timelines=("h, cx, h, cx", "cx, _, cx, _"),
 ) -> dict:
     return {
         "longCircuit": {
             "maxOpsPerQubit": max_ops,
             "maxParallelOps": max_parallel,
             "maxOpsQubits": list(holders),
-            "operationsPerQubit": list(sequences),
+            "timelinePerQubit": list(timelines),
             "value": lc,
             "gateError": 0.00485,
             "errorFreeProbability": 0.84,
@@ -93,7 +93,7 @@ def test_detected_smells_comes_from_the_measurement_not_from_the_model(mocker) -
         agent,
         "_run_prescription_crew",
         return_value=_SmellPrescriptionSchema(
-            repairable=True, report_details="Rimuovi le righe 4 e 5."
+            report_details="Rimuovi le righe 4 e 5.", repairable=True
         ),
     )
 
@@ -126,7 +126,7 @@ def test_each_threshold_drives_its_own_label(mocker, lc, idq, expected) -> None:
     mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
+        return_value=_SmellPrescriptionSchema(report_details="...", repairable=True),
     )
 
     assert agent.detect_smell(_SAMPLE_CODE).get_detected_smells() == expected
@@ -150,7 +150,7 @@ def test_the_prompt_carries_the_qubits_holding_the_maximum(mocker) -> None:
     crew = mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
+        return_value=_SmellPrescriptionSchema(report_details="...", repairable=True),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
@@ -170,7 +170,7 @@ def test_the_prompt_carries_the_precomputed_target(mocker) -> None:
     crew = mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
+        return_value=_SmellPrescriptionSchema(report_details="...", repairable=True),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
@@ -186,7 +186,7 @@ def test_the_idle_qubit_pointer_is_passed_only_when_there_is_a_wait(mocker) -> N
     crew = mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
+        return_value=_SmellPrescriptionSchema(report_details="...", repairable=True),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
@@ -200,7 +200,7 @@ def test_the_measurement_is_taken_once_on_the_code_under_analysis(mocker) -> Non
     mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
+        return_value=_SmellPrescriptionSchema(report_details="...", repairable=True),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
@@ -236,20 +236,22 @@ def test_the_prompt_carries_the_executed_operation_sequence(mocker) -> None:
     "lines 2-3 ... 24-25". La sequenza rende visibile cosa il circuito fa davvero.
     """
     agent = _make_agent(
-        _metrics(lc=42, idq=1, max_ops=21, max_parallel=2, sequences=("h, cx, h, cx", "cx, cx")),
+        _metrics(
+            lc=42, idq=1, max_ops=21, max_parallel=2, timelines=("h, cx, h, cx", "cx, _, cx, _")
+        ),
         mocker,
     )
     crew = mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
+        return_value=_SmellPrescriptionSchema(report_details="...", repairable=True),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
 
     measurements = crew.call_args.args[1]
     assert "q0: h, cx, h, cx" in measurements
-    assert "q1: cx, cx" in measurements
+    assert "q1: cx, _, cx, _" in measurements
     # E l'avvertenza che quelle operazioni possono venire da un loop.
     assert "loop" in measurements
 
@@ -266,7 +268,7 @@ def test_an_unrepairable_circuit_keeps_its_smells_but_is_flagged(mocker) -> None
         agent,
         "_run_prescription_crew",
         return_value=_SmellPrescriptionSchema(
-            repairable=False, report_details="Nessuna ridondanza rimovibile."
+            report_details="Nessuna ridondanza rimovibile.", repairable=False
         ),
     )
 

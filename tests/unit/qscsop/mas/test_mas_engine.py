@@ -127,7 +127,7 @@ def test_process_entity_fails_once_then_succeeds() -> None:
     assert first_call_args[2] == ""
     assert second_call_args[2] == "correggi l'equivalenza"
     collaborators["reviewer_agent"].review.assert_called_once_with(
-        invalid_result, smell_report, "attempt_1"
+        invalid_result, smell_report, BASELINE_CODE, "attempt_1"
     )
 
 
@@ -193,13 +193,17 @@ def test_process_entity_returns_same_instance() -> None:
 
 
 @pytest.mark.unit
-def test_an_unrepairable_circuit_never_enters_the_loop() -> None:
-    """IL TEST CHE FISSA IL RISPARMIO.
+def test_the_loop_runs_even_when_the_detector_calls_the_circuit_unrepairable() -> None:
+    """IL VERDETTO DEL DETECTOR NON E' UN CANCELLO, ed e' una decisione presa sui dati.
 
-    Quando il DetectorAgent dichiara che non c'e' nulla di rimovibile, entrare nel ciclo
-    brucerebbe fino a sei chiamate LLM per arrivare comunque a OPT_FAILED, e il motivo
-    registrato sarebbe fuorviante: sembrerebbe un tentativo fallito invece di un tentativo mai
-    iniziato. iterationCount a 0 e' proprio cio' che distingue i due casi in analisi.
+    Per un giro il MASEngine usava repairable=False per chiudere l'entita' a OPT_FAILED senza
+    entrare nel ciclo, risparmiando fino a sei chiamate LLM. Misurato sui 48 circuiti smelly del
+    dataset sintetico: dei 33 dichiarati irriparabili, 15 erano migliorabili e 5 erano portabili
+    sotto soglia dall'ottimizzatore di Qiskit. Cinque riparazioni perfette scartate senza un
+    tentativo, su un tetto complessivo di nove: la scorciatoia dimezzava il massimo raggiungibile.
+
+    Il flag resta nel DTO e nella tracciatura -- serve a misurare quanto il modello ci prenda --
+    ma qui il ciclo parte comunque, e l'esito lo decide la validazione.
     """
     collaborators = _make_collaborators()
     collaborators["detector_agent"].detect_smell.return_value = SmellReportDTO(
@@ -208,15 +212,15 @@ def test_an_unrepairable_circuit_never_enters_the_loop() -> None:
         detected_smells=["long_circuit"],
         repairable=False,
     )
+    collaborators["refactorer_agent"].refactor.return_value = "attempt_1"
+    collaborators["validation_service"].validate.return_value = ValidationResultDTO(
+        is_valid=True, new_metrics=NEW_METRICS, raw_error_data=None
+    )
     engine = MASEngine(max_iterations=3, **collaborators)
 
     result = engine.process_entity(_make_entity())
 
     evaluation = result.get_evaluation()
-    assert evaluation.get_status() == EvaluationStatus.OPT_FAILED
-    assert evaluation.get_failure_reason() == FailureReason.NOT_REPAIRABLE
-    assert evaluation.get_iteration_count() == 0
-    assert evaluation.get_detected_smells() == ["long_circuit"]
-    assert result.get_refactored() is None
-    collaborators["refactorer_agent"].refactor.assert_not_called()
-    collaborators["reviewer_agent"].review.assert_not_called()
+    assert evaluation.get_status() == EvaluationStatus.OPTIMIZED
+    assert evaluation.get_iteration_count() == 1
+    collaborators["refactorer_agent"].refactor.assert_called_once()

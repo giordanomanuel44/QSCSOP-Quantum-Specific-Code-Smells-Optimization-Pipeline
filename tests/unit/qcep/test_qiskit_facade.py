@@ -737,7 +737,7 @@ def test_no_symmetric_pointer_exists_for_the_columns(facade: QiskitFacade) -> No
 
 
 @pytest.mark.unit
-def test_operations_per_qubit_bridges_source_lines_and_executed_operations(
+def test_timeline_per_qubit_bridges_source_lines_and_executed_operations(
     facade: QiskitFacade,
 ) -> None:
     """IL PUNTO DELL'INTERA CHIAVE, in un test.
@@ -755,7 +755,7 @@ def test_operations_per_qubit_bridges_source_lines_and_executed_operations(
     )
 
     long_circuit = facade.calculate_smell_metrics(code)["longCircuit"]
-    sequences = long_circuit["operationsPerQubit"]
+    sequences = long_circuit["timelinePerQubit"]
 
     assert len(code.splitlines()) == 7
     assert long_circuit["maxOpsPerQubit"] == 21
@@ -767,7 +767,7 @@ def test_operations_per_qubit_bridges_source_lines_and_executed_operations(
 
 
 @pytest.mark.unit
-def test_operations_per_qubit_is_ordered_by_index_and_excludes_barriers(
+def test_timeline_per_qubit_is_ordered_by_index_and_excludes_barriers(
     facade: QiskitFacade,
 ) -> None:
     code = (
@@ -776,17 +776,17 @@ def test_operations_per_qubit_is_ordered_by_index_and_excludes_barriers(
         "qc.h(0)\nqc.barrier()\nqc.x(0)\nqc.y(1)\n"
     )
 
-    sequences = facade.calculate_smell_metrics(code)["longCircuit"]["operationsPerQubit"]
+    sequences = facade.calculate_smell_metrics(code)["longCircuit"]["timelinePerQubit"]
 
     assert sequences == ["h, x", "y", ""]
 
 
 @pytest.mark.unit
-def test_operations_per_qubit_has_one_entry_per_qubit_even_when_empty(
+def test_timeline_per_qubit_has_one_entry_per_qubit_even_when_empty(
     facade: QiskitFacade,
 ) -> None:
     code = "from qiskit import QuantumCircuit\nqc = QuantumCircuit(3)\n"
 
-    sequences = facade.calculate_smell_metrics(code)["longCircuit"]["operationsPerQubit"]
+    sequences = facade.calculate_smell_metrics(code)["longCircuit"]["timelinePerQubit"]
 
     assert sequences == ["", "", ""]

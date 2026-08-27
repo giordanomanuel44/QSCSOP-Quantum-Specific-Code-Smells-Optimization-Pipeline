@@ -44,20 +44,25 @@ from qscsop_pipeline.qscsop.mas.interfaces.i_detector_agent import IDetectorAgen
 
 
 class _SmellPrescriptionSchema(BaseModel):
-    """Il verdetto di riparabilita' e la prescrizione. Nient'altro.
+    """La prescrizione e, in coda, il giudizio di riparabilita'.
 
-    L'ORDINE CONTA: repairable viene PRIMO perche' in generazione autoregressiva ogni campo e'
-    condizionato solo su quelli che lo precedono. Cosi' il modello si impegna sul verdetto e poi
-    lo motiva, invece di scrivere una giustificazione e appiccicarci in fondo un verdetto
-    coerente con essa -- che e' il modo in cui nasce una ridondanza inventata.
+    L'ORDINE E' STATO INVERTITO dopo la misura. Con repairable per primo il modello si impegnava
+    sul verdetto prima di aver guardato il circuito, e poi lo motivava: su un circuito reale ha
+    scritto "No adjacent repetitions exist for cancellation" DENTRO una prescrizione dichiarata
+    riparabile. Ora l'analisi viene prima e l'etichetta la riassume.
+
+    repairable NON DECIDE PIU' NULLA nel MASEngine, ed e' per questo che puo' stare in coda: e'
+    il giudizio del modello, registrato per poterlo valutare, non un cancello sul ciclo. Quando
+    lo era, su 33 circuiti dichiarati irriparabili 15 erano invece migliorabili e 5 erano
+    portabili sotto soglia -- cinque riparazioni perfette scartate senza un tentativo.
 
     Cio' che NON si chiede resta il punto: l'etichetta dello smell la decidono le soglie sulla
     misura della facade, quindi un output del modello che contraddica la misura non e'
     rappresentabile.
     """
 
-    repairable: bool
     report_details: str
+    repairable: bool
 
 
 # ---------------------------------------------------------------------------------------------
@@ -84,7 +89,24 @@ l unchanged. You must remove from all of them.
 
 The list of qubits currently holding the maximum is given to you below. Use it.
 
-THE SOURCE AND THE EXECUTED CIRCUIT ARE NOT THE SAME OBJECT. The measurements below describe what the circuit ACTUALLY EXECUTES. The source may build those operations with a loop, so the number of operations on a qubit is NOT the number of lines in the file: a `for` of 10 iterations with two gates in its body produces 20 operations out of 2 lines. When you name lines to change, name lines that EXIST IN THE SOURCE shown to you; when you count operations, count them from the executed sequence given below. Never invent an unrolled version of the source and quote line numbers from it.
+HOW OPERATIONS DISAPPEAR -- READ THIS BEFORE PRESCRIBING ANYTHING
+
+Removing an operation is only legitimate when the circuit still computes the same thing. There are exactly two ways that happens, and the second one is the one that gets missed.
+
+(1) TWO SELF-INVERSE GATES ON CONSECUTIVE TIME STEPS. `x, x` or `h, h` or `z, z` or `y, y` on the same qubit with nothing in between cancel to nothing. Two `cx` on the same control/target pair, consecutive, likewise.
+
+(2) TWO GATES THAT ARE NOT NEXT TO EACH OTHER BUT COMMUTE THROUGH WHAT SEPARATES THEM. This is the case you will see most often, and adjacency in the timeline does NOT tell you about it:
+
+- Z, S, T, P and RZ on a qubit COMMUTE with a `cx` in which that qubit is the CONTROL. So in `z, cx, z, cx, z, cx, ...` every z slides past every cx, they all meet, and z*z = identity. That chain collapses almost completely -- measured, one such circuit went from l * c = 34 to l * c = 2.
+- X on a qubit commutes with a `cx` in which that qubit is the TARGET.
+- Z commutes with `cz` on either qubit.
+- Any gate commutes with operations that do not touch its qubit at all.
+
+- H does NOT commute with `cx` on the control. So `h, cx, h, cx, h, cx, ...` looks exactly like the z case in the timeline and collapses to NOTHING. Measured: that circuit stays at l * c = 42.
+
+`z, cx, z, cx` and `h, cx, h, cx` are indistinguishable by adjacency and opposite in outcome. Deciding by "are two identical gates written next to each other" is therefore wrong in both directions: it invents cancellations that do not exist and it misses the ones that do. Reason about the GATE, not about the spacing.
+
+THE SOURCE AND THE EXECUTED CIRCUIT ARE NOT THE SAME OBJECT. The measurements below describe what the circuit ACTUALLY EXECUTES. The source may build those operations with a loop, so the number of operations on a qubit is NOT the number of lines in the file: a `for` of 10 iterations with two gates in its body produces 20 operations out of 2 lines. When you name lines to change, name lines that EXIST IN THE SOURCE shown to you; when you count operations, count them from the timeline given below, where "_" marks a time step in which that qubit does nothing. Never invent an unrolled version of the source and quote line numbers from it.
 
 IDLE QUBITS is the longest wait a qubit spends between two of its own operations. It is smelly \
 at IdQ > {IDLE_QUBITS_CUTOFF}. It is repaired by REORDERING or by filling the wait, never by \
@@ -168,7 +190,7 @@ for q in range(4):
 Measured l=10, c=4, l*c=40, and all four qubits hold the maximum. Every gate is distinct and contributes; nothing cancels. Reaching l * c < 20 would require l <= 4, that is removing 6 of the 10 operations from EVERY one of the four qubits, which cannot be done while preserving the circuit's behaviour.
 Prescription: "No removable redundancy. Every operation contributes and nothing cancels; this circuit is above the threshold by size alone and cannot be brought under it without changing what it computes."
 
-Example 5 -- a LOOP-BUILT circuit with nothing to remove (say so)
+Example 5 -- a LOOP-BUILT chain where NOTHING commutes (nothing to remove)
 ```python
 qc = QuantumCircuit(2, 2)
 for i in range(10):
@@ -177,13 +199,28 @@ for i in range(10):
 qc.measure(0, 0)
 qc.measure(1, 1)
 ```
-Measured l=21, c=2, l*c=42, and the executed sequence on q0 is:
-  h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, measure
-Note the mismatch that this example exists to teach: the SOURCE has 7 lines, but q0 executes 21 operations, because the loop body runs ten times. There is no line 21 to remove.
-Reading the sequence: no two adjacent operations are the same, so nothing cancels. Every h is separated by a cx. Reaching l * c < 20 would require l <= 9, that is dropping more than half of q0's operations, and there is no redundancy to drop them from.
-Prescription: "No removable redundancy. The source builds q0's 21 operations with a loop of 10 iterations; the executed sequence alternates h and cx with no adjacent repetition, so nothing cancels. This circuit is above the threshold by size alone."
+Measured l=21, c=2, l*c=42. The timeline is:
+  q0: h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, measure
+  q1: cx, _, cx, _, cx, _, cx, _, cx, _, cx, _, cx, _, cx, _, cx, _, cx, measure
+Two things this example exists to teach. First, the SOURCE has 7 lines but q0 executes 21 operations, because the loop body runs ten times -- there is no line 21 to remove. Second, no two h gates are consecutive AND H does not commute with cx on the control, so they can never be brought together: rule (2) does not apply here. Measured, this circuit does not reduce at all.
+Prescription: "No removable redundancy. q0 alternates h and cx; the h gates are never consecutive and H does not commute through cx on the control, so they cannot be combined. This circuit is above the threshold by size alone."
 
-Example 6 -- a LOOP-BUILT circuit where the repair is the RANGE, not a line
+Example 6 -- the SAME SHAPE, but the gate commutes (this one collapses)
+```python
+qc = QuantumCircuit(2, 2)
+for i in range(8):
+    qc.z(0)
+    qc.cx(0, 1)
+qc.measure(0, 0)
+qc.measure(1, 1)
+```
+Measured l=17, c=2, l*c=34. The timeline is:
+  q0: z, cx, z, cx, z, cx, z, cx, z, cx, z, cx, z, cx, z, cx, measure
+  q1: cx, _, cx, _, cx, _, cx, _, cx, _, cx, _, cx, _, cx, measure
+Compare with Example 5: the timeline has the SAME shape and the answer is the opposite. Z commutes with cx on the control, so all eight z gates slide together and cancel in pairs; the eight cx on the same pair then cancel in pairs too. Measured, the whole body reduces to nothing and l * c drops from 34 to 2. Adjacency would have said "nothing to remove" in both examples, and it would have been wrong here.
+Prescription: "The loop body is fully removable. Z commutes with cx on the control, so the eight z(0) gates combine and cancel in pairs, and the eight cx(0, 1) then cancel in pairs as well. Delete the loop entirely (lines 3-5), keeping the two measure calls."
+
+Example 7 -- a LOOP-BUILT circuit where the repair is inside the loop BODY
 ```python
 qc = QuantumCircuit(2, 2)
 for i in range(12):
@@ -193,8 +230,8 @@ for i in range(12):
 qc.measure(0, 0)
 qc.measure(1, 1)
 ```
-The executed sequence on q0 is x, x, cx, x, x, cx, ... -- here the adjacent pair DOES repeat, so each iteration carries a cancelling pair. The fix is not to delete a line number: it is to change what the loop body does.
-Prescription: "Each iteration applies qc.x(0) twice in a row (lines 4-5); the two cancel. Remove both from the loop body, keeping the loop and its range intact. q0 holds l."
+The timeline on q0 is x, x, cx, x, x, cx, ... -- here rule (1) applies directly: each iteration carries two consecutive x gates that cancel. The fix is not a line number in an unrolled version: it is to change what the loop body does, keeping the loop and its range.
+Prescription: "Each iteration applies qc.x(0) twice in a row (lines 4-5); the two are consecutive and cancel. Remove both from the loop body, keeping the loop and its range intact. q0 holds l."
 """
 
 
@@ -228,7 +265,7 @@ For IDLE QUBITS, state: which qubit waits, between which two of its own operatio
 falls, and what to do about it -- reorder so the wait disappears, or fill it -- without \
 lengthening the chain of the busiest qubit.
 
-SET repairable FIRST. Put false when the circuit is over the threshold purely because of its size -- every operation contributing, nothing cancelling -- and true when you can name a concrete change. Decide it before writing the prescription, not after.
+SET repairable LAST, after you have written the prescription: it summarises what you found. Put false only when you have checked BOTH ways an operation can disappear -- consecutive self-inverse gates, and gates that commute through what separates them -- and neither applies. If either applies, it is true and the prescription must name the change.
 
 IF THERE IS NOTHING TO REMOVE, SAY SO. A circuit can be over the threshold purely because of its \
 size, with every operation contributing and nothing cancelling. Reporting "no removable \
@@ -241,10 +278,10 @@ Respond ONLY with the required structured object, with no extra text outside it.
 
 
 _EXPECTED_OUTPUT = (
-    "A structured object with two fields, in this order: repairable (false when the circuit is "
-    "above the threshold by size alone, with every operation contributing and nothing "
-    "cancelling) and report_details (an actionable prescription naming the concrete source lines "
-    "and operations to change, or the reason why nothing can be removed)."
+    "A structured object with two fields, in this order: report_details (an actionable "
+    "prescription naming the concrete source lines and operations to change, or the reason why "
+    "nothing can be removed) and repairable (false only when neither consecutive self-inverse "
+    "gates nor commuting gates allow any removal)."
 )
 
 
@@ -296,9 +333,9 @@ class DetectorAgent(IDetectorAgent):
         prescription = self._run_prescription_crew(
             code, _format_measurements(long_circuit, idle_qubits, detected_smells)
         )
-        # repairable=False NON e' "nessuno smell": lo smell c'e', misurato, ma il Detector
-        # dichiara che non esiste una riparazione che preservi il comportamento. Il MASEngine
-        # legge questo flag per saltare il ciclo invece di bruciare sei chiamate LLM.
+        # repairable e' REGISTRATO, non agito: il MASEngine entra nel ciclo comunque. Quando
+        # lo usava per saltarlo, su 33 dichiarati irriparabili 15 erano migliorabili -- il flag
+        # resta perche' misurarne l'accuratezza e' un dato, fidarsene era un costo.
         return SmellReportDTO(
             has_smells=True,
             report_details=prescription.report_details,
@@ -342,12 +379,12 @@ def _format_measurements(long_circuit: dict, idle_qubits: dict, detected_smells:
     derivare al modello: e' l'aritmetica che ha gia' sbagliato in passato, e qui e' esatta.
     """
     lines = [
-        "- operations ACTUALLY EXECUTED by each qubit, in order (the source may build these "
-        "with a loop):",
+        "- TIMELINE of the executed circuit, one row per qubit, one entry per time step. "
+        '"_" means that qubit does nothing at that step. The source may build these with a loop:',
     ]
     lines += [
-        f"    q{index}: {sequence or '(none)'}"
-        for index, sequence in enumerate(long_circuit["operationsPerQubit"])
+        f"    q{index}: {timeline or '(none)'}"
+        for index, timeline in enumerate(long_circuit["timelinePerQubit"])
     ]
     lines += [
         f"- l (max operations on one qubit) = {long_circuit['maxOpsPerQubit']}",

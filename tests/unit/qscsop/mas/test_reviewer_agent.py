@@ -18,6 +18,7 @@ _FEEDBACK = (
     "Il tentativo precedente ha rimosso il qubit inerte ma ha anche cancellato gate legittimi "
     "sugli altri qubit: rimuovi solo il qubit idle e lascia intatto il resto."
 )
+_BASELINE_CODE = "qc = QuantumCircuit(2)\nqc.h(0)\nqc.x(0)\nqc.x(0)\nqc.cx(0, 1)\n"
 _FAILED_CODE = "qc = QuantumCircuit(2)\nqc.h(0)\nqc.cx(0, 1)\n"
 
 
@@ -88,7 +89,7 @@ def test_review_returns_contextualized_feedback(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=_FEEDBACK),
     )
 
-    result = agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
+    result = agent.review(_equivalence_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
     assert result == _FEEDBACK
 
@@ -103,7 +104,7 @@ def test_review_propagates_parsing_failure(mocker) -> None:
     )
 
     with pytest.raises(RuntimeError, match="output non conforme allo schema"):
-        agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
+        agent.review(_equivalence_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
 
 @pytest.mark.unit
@@ -117,9 +118,9 @@ def test_review_invokes_crew_once_with_all_arguments(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=_FEEDBACK),
     )
 
-    agent.review(validation_result, report, _FAILED_CODE)
+    agent.review(validation_result, report, _BASELINE_CODE, _FAILED_CODE)
 
-    run_mock.assert_called_once_with(validation_result, report, _FAILED_CODE)
+    run_mock.assert_called_once_with(validation_result, report, _BASELINE_CODE, _FAILED_CODE)
 
 
 @pytest.mark.unit
@@ -145,7 +146,7 @@ def test_review_returns_long_feedback_without_truncation(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=long_feedback),
     )
 
-    result = agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
+    result = agent.review(_equivalence_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
     assert result == long_feedback
 
@@ -161,7 +162,7 @@ def test_review_returns_empty_feedback_verbatim(mocker) -> None:
         return_value=_ReviewSchema(contextualized_feedback=""),
     )
 
-    result = agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
+    result = agent.review(_equivalence_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
     assert result == ""
 
@@ -190,11 +191,16 @@ def test_task_prompt_includes_equivalence_hint_only_on_equivalence_errors(mocker
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
+    agent.review(_equivalence_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
     assert "ADDITIONAL HINT FOR THIS SPECIFIC FAILURE" in captured["task"].description
     assert "FUNCTIONAL EQUIVALENCE" in captured["task"].description
 
-    agent.review(_equivalence_failure("SyntaxError: invalid syntax"), _smell_report(), _FAILED_CODE)
+    agent.review(
+        _equivalence_failure("SyntaxError: invalid syntax"),
+        _smell_report(),
+        _BASELINE_CODE,
+        _FAILED_CODE,
+    )
     assert "ADDITIONAL HINT FOR THIS SPECIFIC FAILURE" not in captured["task"].description
 
 
@@ -206,7 +212,7 @@ def test_task_prompt_carries_raw_error_and_original_smell(mocker) -> None:
     report = _smell_report()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_equivalence_failure(), report, _FAILED_CODE)
+    agent.review(_equivalence_failure(), report, _BASELINE_CODE, _FAILED_CODE)
 
     description = captured["task"].description
     assert _RAW_ERROR in description
@@ -220,7 +226,7 @@ def test_task_prompt_includes_failed_code(mocker) -> None:
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
+    agent.review(_equivalence_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
     description = captured["task"].description
     assert "THE CODE THAT WAS ATTEMPTED" in description
@@ -236,7 +242,7 @@ def test_task_prompt_includes_metrics_not_improved_hint_when_new_metrics_is_popu
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_metrics_not_improved_failure(), _smell_report(), _FAILED_CODE)
+    agent.review(_metrics_not_improved_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
     description = captured["task"].description
     assert "did not satisfy the improvement criterion" in description
@@ -251,7 +257,9 @@ def test_task_prompt_metrics_hint_covers_case_1_no_improvement_at_all(mocker) ->
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_metrics_no_improvement_at_all_failure(), _smell_report(), _FAILED_CODE)
+    agent.review(
+        _metrics_no_improvement_at_all_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE
+    )
 
     description = captured["task"].description
     assert "CASE 1" in description
@@ -265,7 +273,7 @@ def test_task_prompt_metrics_hint_covers_case_2_near_miss(mocker) -> None:
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_metrics_near_miss_failure(), _smell_report(), _FAILED_CODE)
+    agent.review(_metrics_near_miss_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
     description = captured["task"].description
     assert "ADDITIONAL HINT FOR THIS SPECIFIC FAILURE" in description
@@ -281,7 +289,7 @@ def test_task_prompt_includes_equivalence_hint_when_new_metrics_is_none_and_erro
     agent = _make_agent()
     captured = _capture_task(mocker, agent)
 
-    agent.review(_equivalence_failure(), _smell_report(), _FAILED_CODE)
+    agent.review(_equivalence_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
     description = captured["task"].description
     assert "FUNCTIONAL EQUIVALENCE" in description
@@ -298,8 +306,28 @@ def test_task_prompt_injects_no_special_hint_on_compilation_failure(mocker) -> N
     compilation_failure = _equivalence_failure(
         'Traceback (most recent call last):\n  File "<string>", line 3\nSyntaxError: invalid syntax'
     )
-    agent.review(compilation_failure, _smell_report(), _FAILED_CODE)
+    agent.review(compilation_failure, _smell_report(), _BASELINE_CODE, _FAILED_CODE)
 
     description = captured["task"].description
     assert "FUNCTIONAL EQUIVALENCE" not in description
     assert "did not satisfy the improvement criterion" not in description
+
+
+@pytest.mark.unit
+def test_the_prompt_carries_the_baseline_next_to_the_failed_attempt(mocker) -> None:
+    """UNA REVISIONE E' UN CONFRONTO, e senza il baseline ne ha un termine solo.
+
+    Prima che questo argomento esistesse il Reviewer vedeva unicamente il codice fallito, e da
+    quello DEDUCEVA il punto di partenza: su un circuito di 23 operazioni ha scritto "the original
+    circuit had only two operations" -- il conteggio del tentativo fallito, non dell'originale.
+    Quel feedback finiva verbatim nel prompt del tentativo successivo.
+    """
+    agent = _make_agent()
+    crew = mocker.patch.object(
+        agent, "_run_review_crew", return_value=_ReviewSchema(contextualized_feedback="ok")
+    )
+
+    agent.review(_equivalence_failure(), _smell_report(), _BASELINE_CODE, _FAILED_CODE)
+
+    assert crew.call_args.args[2] == _BASELINE_CODE
+    assert crew.call_args.args[3] == _FAILED_CODE

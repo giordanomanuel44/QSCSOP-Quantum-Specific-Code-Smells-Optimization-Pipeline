@@ -150,16 +150,20 @@ class ReviewerAgent(IReviewerAgent):
         self,
         validation_result: ValidationResultDTO,
         original_smell: SmellReportDTO,
+        baseline_code: str,
         failed_code: str,
     ) -> str:
         """Contestualizza l'esito di validazione rispetto allo smell originale; ritorna il feedback."""
-        result = self._run_review_crew(validation_result, original_smell, failed_code)
+        result = self._run_review_crew(
+            validation_result, original_smell, baseline_code, failed_code
+        )
         return result.contextualized_feedback
 
     def _run_review_crew(
         self,
         validation_result: ValidationResultDTO,
         original_smell: SmellReportDTO,
+        baseline_code: str,
         failed_code: str,
     ) -> _ReviewSchema:
         """Esegue il Crew di review e ritorna l'output strutturato; isola la chiamata all'LLM.
@@ -189,6 +193,7 @@ class ReviewerAgent(IReviewerAgent):
             description=_TASK_DESCRIPTION_TEMPLATE.format(
                 report_details=original_smell.get_report_details(),
                 raw_error_details=raw_error_details,
+                baseline_code=baseline_code,
                 failed_code=failed_code,
                 hint_section=hint_section,
             ),
