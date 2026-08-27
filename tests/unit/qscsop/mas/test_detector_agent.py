@@ -26,12 +26,21 @@ from qscsop_pipeline.qscsop.mas.dto.quantum_smell_type import QuantumSmellType
 _SAMPLE_CODE = "qc.h(0)\nqc.z(0)\nqc.h(0)\n"
 
 
-def _metrics(*, lc: int, idq: int, max_ops: int = 7, max_parallel: int = 5, holders=(0,)) -> dict:
+def _metrics(
+    *,
+    lc: int,
+    idq: int,
+    max_ops: int = 7,
+    max_parallel: int = 5,
+    holders=(0,),
+    sequences=("h, cx, h, cx", "cx, cx"),
+) -> dict:
     return {
         "longCircuit": {
             "maxOpsPerQubit": max_ops,
             "maxParallelOps": max_parallel,
             "maxOpsQubits": list(holders),
+            "operationsPerQubit": list(sequences),
             "value": lc,
             "gateError": 0.00485,
             "errorFreeProbability": 0.84,
@@ -83,7 +92,9 @@ def test_detected_smells_comes_from_the_measurement_not_from_the_model(mocker) -
     mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(report_details="Rimuovi le righe 4 e 5."),
+        return_value=_SmellPrescriptionSchema(
+            repairable=True, report_details="Rimuovi le righe 4 e 5."
+        ),
     )
 
     report = agent.detect_smell(_SAMPLE_CODE)
@@ -115,7 +126,7 @@ def test_each_threshold_drives_its_own_label(mocker, lc, idq, expected) -> None:
     mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(report_details="..."),
+        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
     )
 
     assert agent.detect_smell(_SAMPLE_CODE).get_detected_smells() == expected
@@ -139,7 +150,7 @@ def test_the_prompt_carries_the_qubits_holding_the_maximum(mocker) -> None:
     crew = mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(report_details="..."),
+        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
@@ -159,7 +170,7 @@ def test_the_prompt_carries_the_precomputed_target(mocker) -> None:
     crew = mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(report_details="..."),
+        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
@@ -175,7 +186,7 @@ def test_the_idle_qubit_pointer_is_passed_only_when_there_is_a_wait(mocker) -> N
     crew = mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(report_details="..."),
+        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
@@ -189,7 +200,7 @@ def test_the_measurement_is_taken_once_on_the_code_under_analysis(mocker) -> Non
     mocker.patch.object(
         agent,
         "_run_prescription_crew",
-        return_value=_SmellPrescriptionSchema(report_details="..."),
+        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
     )
 
     agent.detect_smell(_SAMPLE_CODE)
@@ -209,3 +220,71 @@ def test_a_measurement_failure_is_not_swallowed(mocker) -> None:
 
     with pytest.raises(ValueError):
         agent.detect_smell(_SAMPLE_CODE)
+
+
+# ------------------------------------------------------------------------------------------
+# La sequenza eseguita e il verdetto di riparabilita'.
+# ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_the_prompt_carries_the_executed_operation_sequence(mocker) -> None:
+    """IL PONTE FRA SORGENTE E CIRCUITO ESEGUITO.
+
+    Ricevendo i soli conteggi, il modello immaginava uno srotolamento inesistente: su un
+    sorgente di 8 righe che costruisce 21 operazioni con un for, prescriveva di rimuovere
+    "lines 2-3 ... 24-25". La sequenza rende visibile cosa il circuito fa davvero.
+    """
+    agent = _make_agent(
+        _metrics(lc=42, idq=1, max_ops=21, max_parallel=2, sequences=("h, cx, h, cx", "cx, cx")),
+        mocker,
+    )
+    crew = mocker.patch.object(
+        agent,
+        "_run_prescription_crew",
+        return_value=_SmellPrescriptionSchema(repairable=True, report_details="..."),
+    )
+
+    agent.detect_smell(_SAMPLE_CODE)
+
+    measurements = crew.call_args.args[1]
+    assert "q0: h, cx, h, cx" in measurements
+    assert "q1: cx, cx" in measurements
+    # E l'avvertenza che quelle operazioni possono venire da un loop.
+    assert "loop" in measurements
+
+
+@pytest.mark.unit
+def test_an_unrepairable_circuit_keeps_its_smells_but_is_flagged(mocker) -> None:
+    """repairable=False non e' "nessuno smell": lo smell c'e', misurato.
+
+    E' un circuito sopra soglia per sola dimensione. Il flag arriva al MASEngine tramite il DTO,
+    ed e' li' che decide di non entrare nel ciclo.
+    """
+    agent = _make_agent(_metrics(lc=40, idq=0), mocker)
+    mocker.patch.object(
+        agent,
+        "_run_prescription_crew",
+        return_value=_SmellPrescriptionSchema(
+            repairable=False, report_details="Nessuna ridondanza rimovibile."
+        ),
+    )
+
+    report = agent.detect_smell(_SAMPLE_CODE)
+
+    assert report.get_has_smells() is True
+    assert report.get_detected_smells() == [QuantumSmellType.LONG_CIRCUIT.value]
+    assert report.get_repairable() is False
+
+
+@pytest.mark.unit
+def test_a_clean_circuit_is_reported_repairable_by_default(mocker) -> None:
+    """Sul ramo pulito l'LLM non viene invocato, quindi nessuno valorizza il flag: resta True.
+
+    Non ha conseguenze -- has_smells=False fa uscire il MASEngine prima di guardarlo -- ma il
+    default non deve essere False, altrimenti un circuito sano verrebbe letto come irriparabile.
+    """
+    agent = _make_agent(_metrics(lc=4, idq=0), mocker)
+    mocker.patch.object(agent, "_run_prescription_crew")
+
+    assert agent.detect_smell(_SAMPLE_CODE).get_repairable() is True

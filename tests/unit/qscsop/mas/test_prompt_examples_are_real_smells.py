@@ -77,11 +77,13 @@ def test_the_refactorer_no_longer_ships_examples_that_are_not_smelly(facade: Qis
 
 @pytest.mark.unit
 def test_every_detector_example_illustrates_the_rule_it_claims(facade: QiskitFacade) -> None:
-    """I quattro few-shot del DetectorAgent sono inline nel prompt e vanno verificati come tali.
+    """I primi tre few-shot del DetectorAgent, quelli sull'aritmetica di l.
 
-    Non sono costanti separate ma casi dentro _EXAMPLES: qui si ricostruiscono i circuiti e si
-    verifica che i numeri citati nel testo del prompt siano quelli veri. Se qualcuno ritocca un
-    esempio senza rimisurarlo, il prompt inizia a citare numeri falsi.
+    Non sono costanti separate ma casi inline dentro _EXAMPLES: qui si ricostruiscono i circuiti
+    e si verifica che i numeri citati nel testo del prompt siano quelli veri. Se qualcuno ritocca
+    un esempio senza rimisurarlo, il prompt inizia a citare numeri falsi.
+
+    Gli altri tre -- il 4 e i due basati su loop -- hanno un test ciascuno qui sotto.
     """
     header = "from qiskit import QuantumCircuit\n"
 
@@ -119,6 +121,9 @@ def test_the_detector_example_without_redundancy_is_really_unrepairable(
 ) -> None:
     """Il quarto few-shot: sopra soglia per sola dimensione, nulla da togliere.
 
+    E' anche l'unico esempio in cui il massimo e' tenuto da TUTTI i qubit: gli esempi 5 e 6, che
+    insegnano il divario sorgente/eseguito, lavorano entrambi su due qubit soli.
+
     E' il rimedio al rischio principale del disegno ibrido -- l'LLM riceve la classificazione
     gia' fatta e tende a razionalizzare, inventando una ridondanza che non c'e'. Se questo
     circuito diventasse riparabile, l'esempio smetterebbe di insegnare quel permesso.
@@ -140,3 +145,39 @@ def test_the_detector_example_without_redundancy_is_really_unrepairable(
     assert (long_circuit["maxOpsPerQubit"], long_circuit["maxParallelOps"]) == (10, 4)
     # Tutti e quattro i qubit al massimo: la riparazione dovrebbe toccarli tutti.
     assert long_circuit["maxOpsQubits"] == [0, 1, 2, 3]
+
+
+@pytest.mark.unit
+def test_the_loop_based_examples_measure_what_the_prompt_claims(facade: QiskitFacade) -> None:
+    """Gli esempi 5 e 6: e' sul divario sorgente/eseguito che il modello sbagliava.
+
+    Il 79% dei circuiti processati costruisce le proprie operazioni con un for. L'esempio 4 ha
+    dei loop ma non commenta mai il divario, e nessun esempio mostrava la sequenza eseguita: su
+    un sorgente di 8 righe che ne costruisce 21 operazioni il modello prescriveva di rimuovere
+    "lines 2-3 ... 24-25". Questi due rendono il divario esplicito, e i numeri che citano devono
+    essere quelli veri -- altrimenti il prompt insegna con dati falsi proprio l'aritmetica che il
+    modello ha gia' dimostrato di non saper fare.
+    """
+    header = "from qiskit import QuantumCircuit\n"
+
+    # Esempio 5: nulla da rimuovere. 7 righe di sorgente, 21 operazioni su q0.
+    nothing_to_remove = header + (
+        "qc = QuantumCircuit(2, 2)\n"
+        "for i in range(10):\n    qc.h(0)\n    qc.cx(0, 1)\n"
+        "qc.measure(0, 0)\nqc.measure(1, 1)\n"
+    )
+    metrics = _measure(facade, nothing_to_remove)["longCircuit"]
+    assert len(nothing_to_remove.splitlines()) == 7
+    assert (metrics["maxOpsPerQubit"], metrics["maxParallelOps"], metrics["value"]) == (21, 2, 42)
+    assert is_long_circuit(metrics["value"])
+    # Nessuna coppia adiacente identica: e' cio' che rende il circuito irriparabile.
+    assert "h, h" not in metrics["operationsPerQubit"][0]
+
+    # Esempio 6: la riparazione e' nel CORPO del loop, non a una riga inventata.
+    cancelling_pair = header + (
+        "qc = QuantumCircuit(2, 2)\n"
+        "for i in range(12):\n    qc.x(0)\n    qc.x(0)\n    qc.cx(0, 1)\n"
+        "qc.measure(0, 0)\nqc.measure(1, 1)\n"
+    )
+    sequence = _measure(facade, cancelling_pair)["longCircuit"]["operationsPerQubit"][0]
+    assert sequence.startswith("x, x, cx, x, x, cx")

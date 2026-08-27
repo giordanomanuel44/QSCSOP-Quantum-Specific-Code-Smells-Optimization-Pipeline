@@ -190,3 +190,33 @@ def test_process_entity_returns_same_instance() -> None:
     result = engine.process_entity(entity)
 
     assert result is entity
+
+
+@pytest.mark.unit
+def test_an_unrepairable_circuit_never_enters_the_loop() -> None:
+    """IL TEST CHE FISSA IL RISPARMIO.
+
+    Quando il DetectorAgent dichiara che non c'e' nulla di rimovibile, entrare nel ciclo
+    brucerebbe fino a sei chiamate LLM per arrivare comunque a OPT_FAILED, e il motivo
+    registrato sarebbe fuorviante: sembrerebbe un tentativo fallito invece di un tentativo mai
+    iniziato. iterationCount a 0 e' proprio cio' che distingue i due casi in analisi.
+    """
+    collaborators = _make_collaborators()
+    collaborators["detector_agent"].detect_smell.return_value = SmellReportDTO(
+        has_smells=True,
+        report_details="Nessuna ridondanza rimovibile: sopra soglia per sola dimensione.",
+        detected_smells=["long_circuit"],
+        repairable=False,
+    )
+    engine = MASEngine(max_iterations=3, **collaborators)
+
+    result = engine.process_entity(_make_entity())
+
+    evaluation = result.get_evaluation()
+    assert evaluation.get_status() == EvaluationStatus.OPT_FAILED
+    assert evaluation.get_failure_reason() == FailureReason.NOT_REPAIRABLE
+    assert evaluation.get_iteration_count() == 0
+    assert evaluation.get_detected_smells() == ["long_circuit"]
+    assert result.get_refactored() is None
+    collaborators["refactorer_agent"].refactor.assert_not_called()
+    collaborators["reviewer_agent"].review.assert_not_called()

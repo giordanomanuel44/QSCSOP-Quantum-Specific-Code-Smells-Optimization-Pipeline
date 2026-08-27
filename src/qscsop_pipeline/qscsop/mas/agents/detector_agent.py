@@ -44,14 +44,19 @@ from qscsop_pipeline.qscsop.mas.interfaces.i_detector_agent import IDetectorAgen
 
 
 class _SmellPrescriptionSchema(BaseModel):
-    """Schema Pydantic interno: un solo campo, la prescrizione.
+    """Il verdetto di riparabilita' e la prescrizione. Nient'altro.
 
-    Le versioni precedenti chiedevano quattro campi, di cui tre erano impalcatura di
-    ragionamento e uno era il verdetto (detected_smell_types). Il verdetto ora non si chiede
-    piu': lo decidono le soglie sulla misura della facade, quindi non e' rappresentabile un
-    output del modello che contraddica la misura.
+    L'ORDINE CONTA: repairable viene PRIMO perche' in generazione autoregressiva ogni campo e'
+    condizionato solo su quelli che lo precedono. Cosi' il modello si impegna sul verdetto e poi
+    lo motiva, invece di scrivere una giustificazione e appiccicarci in fondo un verdetto
+    coerente con essa -- che e' il modo in cui nasce una ridondanza inventata.
+
+    Cio' che NON si chiede resta il punto: l'etichetta dello smell la decidono le soglie sulla
+    misura della facade, quindi un output del modello che contraddica la misura non e'
+    rappresentabile.
     """
 
+    repairable: bool
     report_details: str
 
 
@@ -78,6 +83,8 @@ non-maximum qubit. The work is real and the metric does not move.
 l unchanged. You must remove from all of them.
 
 The list of qubits currently holding the maximum is given to you below. Use it.
+
+THE SOURCE AND THE EXECUTED CIRCUIT ARE NOT THE SAME OBJECT. The measurements below describe what the circuit ACTUALLY EXECUTES. The source may build those operations with a loop, so the number of operations on a qubit is NOT the number of lines in the file: a `for` of 10 iterations with two gates in its body produces 20 operations out of 2 lines. When you name lines to change, name lines that EXIST IN THE SOURCE shown to you; when you count operations, count them from the executed sequence given below. Never invent an unrolled version of the source and quote line numbers from it.
 
 IDLE QUBITS is the longest wait a qubit spends between two of its own operations. It is smelly \
 at IdQ > {IDLE_QUBITS_CUTOFF}. It is repaired by REORDERING or by filling the wait, never by \
@@ -143,7 +150,7 @@ from q0 alone leaves l=4 and l*c=8, measured. Removing it from both brings l to 
 Prescription: "Remove the cancelling x pair from q0 (lines 2-3) AND the one from q1 (lines 5-6). \
 Both qubits hold l=4; removing from only one leaves the metric unchanged."
 
-Example 4 -- no removable redundancy (say so)
+Example 4 -- no removable redundancy, with the maximum SHARED by every qubit
 ```python
 qc = QuantumCircuit(4, 4)
 for layer in range(3):
@@ -158,12 +165,36 @@ for layer in range(3):
 for q in range(4):
     qc.measure(q, q)
 ```
-Measured l=10, c=4, l*c=40. Every gate is distinct and contributes; nothing cancels. Reaching \
-l * c < 20 would require l <= 4, that is removing 6 of the 10 operations from every qubit at the \
-maximum, which cannot be done while preserving the circuit's behaviour.
-Prescription: "No removable redundancy. Every operation contributes and nothing cancels; this \
-circuit is above the threshold by size alone and cannot be brought under it without changing \
-what it computes."
+Measured l=10, c=4, l*c=40, and all four qubits hold the maximum. Every gate is distinct and contributes; nothing cancels. Reaching l * c < 20 would require l <= 4, that is removing 6 of the 10 operations from EVERY one of the four qubits, which cannot be done while preserving the circuit's behaviour.
+Prescription: "No removable redundancy. Every operation contributes and nothing cancels; this circuit is above the threshold by size alone and cannot be brought under it without changing what it computes."
+
+Example 5 -- a LOOP-BUILT circuit with nothing to remove (say so)
+```python
+qc = QuantumCircuit(2, 2)
+for i in range(10):
+    qc.h(0)
+    qc.cx(0, 1)
+qc.measure(0, 0)
+qc.measure(1, 1)
+```
+Measured l=21, c=2, l*c=42, and the executed sequence on q0 is:
+  h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, h, cx, measure
+Note the mismatch that this example exists to teach: the SOURCE has 7 lines, but q0 executes 21 operations, because the loop body runs ten times. There is no line 21 to remove.
+Reading the sequence: no two adjacent operations are the same, so nothing cancels. Every h is separated by a cx. Reaching l * c < 20 would require l <= 9, that is dropping more than half of q0's operations, and there is no redundancy to drop them from.
+Prescription: "No removable redundancy. The source builds q0's 21 operations with a loop of 10 iterations; the executed sequence alternates h and cx with no adjacent repetition, so nothing cancels. This circuit is above the threshold by size alone."
+
+Example 6 -- a LOOP-BUILT circuit where the repair is the RANGE, not a line
+```python
+qc = QuantumCircuit(2, 2)
+for i in range(12):
+    qc.x(0)
+    qc.x(0)
+    qc.cx(0, 1)
+qc.measure(0, 0)
+qc.measure(1, 1)
+```
+The executed sequence on q0 is x, x, cx, x, x, cx, ... -- here the adjacent pair DOES repeat, so each iteration carries a cancelling pair. The fix is not to delete a line number: it is to change what the loop body does.
+Prescription: "Each iteration applies qc.x(0) twice in a row (lines 4-5); the two cancel. Remove both from the loop body, keeping the loop and its range intact. q0 holds l."
 """
 
 
@@ -197,6 +228,8 @@ For IDLE QUBITS, state: which qubit waits, between which two of its own operatio
 falls, and what to do about it -- reorder so the wait disappears, or fill it -- without \
 lengthening the chain of the busiest qubit.
 
+SET repairable FIRST. Put false when the circuit is over the threshold purely because of its size -- every operation contributing, nothing cancelling -- and true when you can name a concrete change. Decide it before writing the prescription, not after.
+
 IF THERE IS NOTHING TO REMOVE, SAY SO. A circuit can be over the threshold purely because of its \
 size, with every operation contributing and nothing cancelling. Reporting "no removable \
 redundancy" is a correct and useful answer: it tells the pipeline this circuit is not repairable \
@@ -208,9 +241,10 @@ Respond ONLY with the required structured object, with no extra text outside it.
 
 
 _EXPECTED_OUTPUT = (
-    "A structured object with a single field, report_details: an actionable prescription naming "
-    "the concrete lines and operations to change, or an explicit statement that no removable "
-    "redundancy exists."
+    "A structured object with two fields, in this order: repairable (false when the circuit is "
+    "above the threshold by size alone, with every operation contributing and nothing "
+    "cancelling) and report_details (an actionable prescription naming the concrete source lines "
+    "and operations to change, or the reason why nothing can be removed)."
 )
 
 
@@ -262,10 +296,14 @@ class DetectorAgent(IDetectorAgent):
         prescription = self._run_prescription_crew(
             code, _format_measurements(long_circuit, idle_qubits, detected_smells)
         )
+        # repairable=False NON e' "nessuno smell": lo smell c'e', misurato, ma il Detector
+        # dichiara che non esiste una riparazione che preservi il comportamento. Il MASEngine
+        # legge questo flag per saltare il ciclo invece di bruciare sei chiamate LLM.
         return SmellReportDTO(
             has_smells=True,
             report_details=prescription.report_details,
             detected_smells=detected_smells,
+            repairable=prescription.repairable,
         )
 
     def _run_prescription_crew(self, code: str, measurements: str) -> _SmellPrescriptionSchema:
@@ -304,6 +342,14 @@ def _format_measurements(long_circuit: dict, idle_qubits: dict, detected_smells:
     derivare al modello: e' l'aritmetica che ha gia' sbagliato in passato, e qui e' esatta.
     """
     lines = [
+        "- operations ACTUALLY EXECUTED by each qubit, in order (the source may build these "
+        "with a loop):",
+    ]
+    lines += [
+        f"    q{index}: {sequence or '(none)'}"
+        for index, sequence in enumerate(long_circuit["operationsPerQubit"])
+    ]
+    lines += [
         f"- l (max operations on one qubit) = {long_circuit['maxOpsPerQubit']}",
         f"- c (max operations in one time step) = {long_circuit['maxParallelOps']}",
         f"- l * c = {long_circuit['value']}  (threshold: smelly at >= {LC_PRODUCT_CUTOFF})",

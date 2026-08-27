@@ -298,6 +298,16 @@ class QiskitFacade(IQiskitFacade):
         il massimo e' condiviso da piu' di un qubit in 34 casi: e' una lista perche' togliere
         operazioni da UNO SOLO dei qubit al massimo non abbassa l di un'unita'.
 
+        "operationsPerQubit" e' la sequenza REALE di operazioni di ciascun qubit, una stringa per
+        riga della matrice, barrier esclusi. Esiste per chiudere un divario che ha prodotto
+        prescrizioni inventate: le metriche descrivono il circuito ESEGUITO (l = 21 operazioni),
+        ma il sorgente puo' costruirle con un for di 10 iterazioni su 8 righe. Ricevendo solo i
+        conteggi, il DetectorAgent immaginava uno srotolamento inesistente e citava righe che nel
+        file non c'erano ("remove lines 2-3 ... 24-25" su un sorgente di 8 righe). La sequenza
+        rende visibile cosa il circuito fa davvero, senza doverlo dedurre. Costa ~80 token sul
+        circuito piu' grande del dataset ed e' input esatto, non una trascrizione generata dal
+        modello -- che era il compito su cui aveva gia' fallito.
+
         NON ESISTE LA SIMMETRICA PER LE COLONNE, ed e' deliberato. Tre ragioni misurate:
         (1) sapere quali colonne realizzano c non aiuta a scegliere cosa rimuovere -- due
         ridondanze sullo stesso qubit, una in colonna affollata e una scarica, danno lo stesso
@@ -312,7 +322,8 @@ class QiskitFacade(IQiskitFacade):
         circuit = self.isolate_circuit(code)
         matrix = self._execution_matrix(circuit)
 
-        ops_per_qubit = [self._count_operations(row) for row in matrix]
+        operation_names = [self._real_operations(row) for row in matrix]
+        ops_per_qubit = [len(names) for names in operation_names]
         max_ops_per_qubit = max(ops_per_qubit, default=0)
         max_parallel_ops = max(
             (self._count_operations(column) for column in zip(*matrix)), default=0
@@ -329,6 +340,7 @@ class QiskitFacade(IQiskitFacade):
                 ]
                 if max_ops_per_qubit
                 else [],
+                "operationsPerQubit": [", ".join(names) for names in operation_names],
                 "value": product,
                 "gateError": self._MAX_GATE_ERROR,
                 "errorFreeProbability": (1 - self._MAX_GATE_ERROR) ** product,
@@ -376,9 +388,14 @@ class QiskitFacade(IQiskitFacade):
         return matrix
 
     @staticmethod
-    def _count_operations(cells) -> int:
-        """Conta le celle occupate da un'operazione reale: vuote e barrier non contano."""
-        return sum(1 for cell in cells if cell and not cell.lower().startswith("barrier"))
+    def _real_operations(cells) -> list[str]:
+        """Nomi delle operazioni reali di una riga o colonna: vuote e barrier escluse."""
+        return [cell for cell in cells if cell and not cell.lower().startswith("barrier")]
+
+    @classmethod
+    def _count_operations(cls, cells) -> int:
+        """Quante celle sono occupate da un'operazione reale."""
+        return len(cls._real_operations(cells))
 
     @staticmethod
     def _idle_qubits_metric(matrix: list[list[str]]) -> tuple[int, Optional[int]]:

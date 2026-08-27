@@ -729,3 +729,64 @@ def test_no_symmetric_pointer_exists_for_the_columns(facade: QiskitFacade) -> No
     assert serialised_metrics["maxParallelOps"] < dense_metrics["maxParallelOps"]
     assert serialised_metrics["value"] < dense_metrics["value"]
     assert facade.check_equivalence(dense, serialised) is True
+
+
+# ------------------------------------------------------------------------------------------
+# operationsPerQubit: il ponte fra il sorgente (che ha loop) e il circuito eseguito.
+# ------------------------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_operations_per_qubit_bridges_source_lines_and_executed_operations(
+    facade: QiskitFacade,
+) -> None:
+    """IL PUNTO DELL'INTERA CHIAVE, in un test.
+
+    Il sorgente ha 7 righe e costruisce 21 operazioni su q0 con un for. Dando al DetectorAgent
+    il solo conteggio l = 21, quello immaginava uno srotolamento inesistente e prescriveva
+    rimozioni a righe che nel file non c'erano. La sequenza dice cosa succede davvero, e la sua
+    lunghezza deve coincidere con l per il qubit al massimo.
+    """
+    code = (
+        "from qiskit import QuantumCircuit\n"
+        "qc = QuantumCircuit(2, 2)\n"
+        "for i in range(10):\n    qc.h(0)\n    qc.cx(0, 1)\n"
+        "qc.measure(0, 0)\nqc.measure(1, 1)\n"
+    )
+
+    long_circuit = facade.calculate_smell_metrics(code)["longCircuit"]
+    sequences = long_circuit["operationsPerQubit"]
+
+    assert len(code.splitlines()) == 7
+    assert long_circuit["maxOpsPerQubit"] == 21
+    assert len(sequences[0].split(", ")) == 21
+    # Gli h su q0 sono separati dai cx: nessuna coppia adiacente da cancellare. E' esattamente
+    # la ridondanza che il modello aveva inventato.
+    assert sequences[0].startswith("h, cx, h, cx")
+    assert "h, h" not in sequences[0]
+
+
+@pytest.mark.unit
+def test_operations_per_qubit_is_ordered_by_index_and_excludes_barriers(
+    facade: QiskitFacade,
+) -> None:
+    code = (
+        "from qiskit import QuantumCircuit\n"
+        "qc = QuantumCircuit(3)\n"
+        "qc.h(0)\nqc.barrier()\nqc.x(0)\nqc.y(1)\n"
+    )
+
+    sequences = facade.calculate_smell_metrics(code)["longCircuit"]["operationsPerQubit"]
+
+    assert sequences == ["h, x", "y", ""]
+
+
+@pytest.mark.unit
+def test_operations_per_qubit_has_one_entry_per_qubit_even_when_empty(
+    facade: QiskitFacade,
+) -> None:
+    code = "from qiskit import QuantumCircuit\nqc = QuantumCircuit(3)\n"
+
+    sequences = facade.calculate_smell_metrics(code)["longCircuit"]["operationsPerQubit"]
+
+    assert sequences == ["", "", ""]

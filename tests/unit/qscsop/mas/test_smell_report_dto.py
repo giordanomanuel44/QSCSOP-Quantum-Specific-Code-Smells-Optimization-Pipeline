@@ -57,9 +57,7 @@ def test_two_instances_do_not_share_the_same_detected_smells_list() -> None:
 
 @pytest.mark.unit
 def test_get_detected_smells_returns_a_copy() -> None:
-    dto = SmellReportDTO(
-        has_smells=True, report_details="", detected_smells=["long_circuit"]
-    )
+    dto = SmellReportDTO(has_smells=True, report_details="", detected_smells=["long_circuit"])
 
     retrieved = dto.get_detected_smells()
     retrieved.append("idle_qubits")
@@ -76,3 +74,30 @@ def test_set_detected_smells_stores_a_copy() -> None:
     external.append("idle_qubits")
 
     assert dto.get_detected_smells() == ["long_circuit"]
+
+
+@pytest.mark.unit
+def test_repairable_defaults_to_true() -> None:
+    """Un circuito e' riparabile finche' il Detector non dichiara il contrario.
+
+    Il default conta: se fosse False, un chiamante che non conosce il campo (il ramo pulito del
+    DetectorAgent, i test, i costruttori esistenti) marcherebbe come irriparabili circuiti sui
+    quali il ciclo non e' mai stato nemmeno interrogato.
+    """
+    dto = SmellReportDTO(has_smells=True, report_details="", detected_smells=["long_circuit"])
+
+    assert dto.get_repairable() is True
+
+
+@pytest.mark.unit
+def test_repairable_is_settable_and_independent_from_has_smells() -> None:
+    """Sono due cose diverse: has_smells dice SE c'e' uno smell, repairable se si puo' togliere."""
+    dto = SmellReportDTO(
+        has_smells=True, report_details="", detected_smells=["long_circuit"], repairable=False
+    )
+
+    assert dto.get_has_smells() is True
+    assert dto.get_repairable() is False
+
+    dto.set_repairable(True)
+    assert dto.get_repairable() is True

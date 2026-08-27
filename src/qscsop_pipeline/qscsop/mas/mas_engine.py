@@ -58,11 +58,26 @@ class MASEngine(IMASEngine):
             # prodotto, e un fallimento diventa indistinguibile dall'altro: una prescrizione
             # inventata e un'esecuzione sbagliata finiscono entrambe su NOT_EQUIVALENT.
             logger.debug(
-                "[%s] PRESCRIZIONE (%s):\n%s",
+                "[%s] PRESCRIZIONE (%s, riparabile=%s):\n%s",
                 circuit_id,
                 ", ".join(smell_report.get_detected_smells()),
+                smell_report.get_repairable(),
                 smell_report.get_report_details(),
             )
+
+            # Terzo esito possibile, fra "nessuno smell" e il ciclo: lo smell c'e' ed e' misurato,
+            # ma il Detector dichiara che non esiste una riparazione che preservi il
+            # comportamento (circuito sopra soglia per sola dimensione). Entrare nel ciclo
+            # brucerebbe fino a sei chiamate LLM per arrivare comunque a OPT_FAILED, e il motivo
+            # registrato sarebbe fuorviante: sembrerebbe un tentativo fallito invece di un
+            # tentativo mai iniziato. iterationCount resta 0, che e' proprio cio' che distingue
+            # i due casi in fase di analisi.
+            if not smell_report.get_repairable():
+                entity.get_evaluation().update_result(
+                    is_functionally_equivalent=False, status=EvaluationStatus.OPT_FAILED
+                )
+                entity.get_evaluation().set_failure_reason(FailureReason.NOT_REPAIRABLE)
+                return entity
 
             review_feedback = ""
             while True:

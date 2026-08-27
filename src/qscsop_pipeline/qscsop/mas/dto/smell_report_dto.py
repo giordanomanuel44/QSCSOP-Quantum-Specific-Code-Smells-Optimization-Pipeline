@@ -11,13 +11,30 @@ class SmellReportDTO:
         has_smells: bool,
         report_details: str,
         detected_smells: Optional[list[str]] = None,
+        repairable: bool = True,
     ) -> None:
         self._has_smells = has_smells
         self._report_details = report_details
+        # Default True: un circuito e' riparabile finche' il DetectorAgent non dichiara il
+        # contrario, cosi' i chiamanti che non conoscono il campo si comportano come prima.
+        self._repairable = repairable
         # Default None invece di [] mutabile: evita di condividere la stessa lista tra istanze.
         self._detected_smells: list[str] = (
             list(detected_smells) if detected_smells is not None else []
         )
+
+    def get_repairable(self) -> bool:
+        """False quando il Detector dichiara che non c'e' nulla di rimovibile.
+
+        NON e' l'assenza di smell (per quello c'e' has_smells): e' un circuito sopra soglia per
+        sola dimensione, in cui ogni operazione contribuisce e nulla si cancella. Il MASEngine
+        salta il ciclo, perche' non esiste una riparazione che preservi il comportamento.
+        E' un GIUDIZIO DEL MODELLO, non una prova: va riportato come tale.
+        """
+        return self._repairable
+
+    def set_repairable(self, value: bool) -> None:
+        self._repairable = value
 
     def get_has_smells(self) -> bool:
         return self._has_smells
