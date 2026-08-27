@@ -7,13 +7,16 @@ lancia il ciclo detect-refactor-validate-review end-to-end su ogni circuito del 
 di input.
 
 Uso (dalla root del progetto, con il venv attivo):
-    python scripts/run_qscsop.py                # dataset_pulito.jsonl -> risultati_dataset.jsonl
-    python scripts/run_qscsop.py --synthetic    # coppia sintetica dei due file
+    python scripts/run_qscsop.py           # sintetico -> risultati_dataset_synthetic.jsonl
+    python scripts/run_qscsop.py --real    # dataset_pulito.jsonl -> risultati_dataset.jsonl
 
---synthetic va usato sull'output della corrispondente esecuzione di run_qcep.py --synthetic:
-i due esperimenti restano su file distinti, cosi' che i risultati sui circuiti sintetici
-(di cui esiste la ground truth, joinabile su circuitId con synthetic_ground_truth_f.jsonl)
-non si mescolino a quelli sui dataset reali.
+IL DEFAULT E' IL SINTETICO, come in run_qcep.py: i due script vanno tenuti allineati, altrimenti
+senza flag lavorerebbero su dataset diversi e i risultati non corrisponderebbero all'input che si
+crede di aver processato. Ogni ramo va usato sull'output del ramo corrispondente di run_qcep.py.
+
+I due esperimenti restano su file distinti, cosi' che i risultati sui circuiti sintetici (di cui
+esiste la ground truth, joinabile su circuitId con synthetic_ground_truth_f.jsonl) non si
+mescolino a quelli sui dataset reali.
 """
 
 import argparse
@@ -52,14 +55,14 @@ MAX_ITERATIONS = 3
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--synthetic",
+        "--real",
         action="store_true",
-        help="Elabora il dataset sintetico prodotto da run_qcep.py --synthetic.",
+        help="Elabora il dataset reale prodotto da run_qcep.py --real.",
     )
     args = parser.parse_args()
 
-    input_path = SYNTHETIC_INPUT_PATH if args.synthetic else INPUT_PATH
-    output_path = SYNTHETIC_OUTPUT_PATH if args.synthetic else OUTPUT_PATH
+    input_path = INPUT_PATH if args.real else SYNTHETIC_INPUT_PATH
+    output_path = OUTPUT_PATH if args.real else SYNTHETIC_OUTPUT_PATH
 
     logging.basicConfig(
         level=logging.INFO,
