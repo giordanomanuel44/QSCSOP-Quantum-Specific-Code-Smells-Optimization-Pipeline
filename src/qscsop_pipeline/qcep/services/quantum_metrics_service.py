@@ -19,7 +19,7 @@ class QuantumMetricsService(IQuantumMetricsService):
         Il baseline porta ora la sola misura QSMELL. Le metriche di costo (gateCount/depth
         astratte e fisiche, logicalQubits) sono uscite dal contratto: erano cieche ai refactoring
         della pipeline e il loro unico consumatore era un KPI che valeva sempre zero -- vedi
-        docs/misura_metriche_fisiche_pre_rimozione.md. Con loro e' sparita la transpilazione, che
+        docs/misura_metriche_fisiche_pre_rimozione.md. Con loro è sparita la transpilazione, che
         era l'operazione piu' costosa di questo servizio: calculate_smell_metrics non transpila.
         """
         source_code = raw_record["sourceCode"]
@@ -27,7 +27,7 @@ class QuantumMetricsService(IQuantumMetricsService):
         if not self._validate_syntax(source_code):
             return None
 
-        # Il dataset proviene da mining di repository reali (codice non fidato): anche a
+        # Il dataset proviene da mining di repository reali: anche a
         # sintassi valida, ogni stadio successivo puo' fallire in modi imprevedibili (gate
         # inesistenti, API Qiskit deprecate, errori runtime nella sandbox). Un'eccezione qui
         # romperebbe il generator a monte in QCEPMain, quindi la si cattura e si scarta il

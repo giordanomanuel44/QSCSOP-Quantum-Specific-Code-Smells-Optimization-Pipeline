@@ -41,8 +41,6 @@ _STATUS_COLORS = {
     EvaluationStatus.SMELL_FREE.value: _MUTED,
 }
 
-_PROCESSED_STATUSES = [EvaluationStatus.OPTIMIZED.value, EvaluationStatus.OPT_FAILED.value]
-
 _NO_DATA_TEXT = "Nessun dato disponibile"
 
 
@@ -53,7 +51,14 @@ class ReportVisualizer(IReportVisualizer):
         self._output_path = Path(output_path)
 
     def visualize(self, df: pd.DataFrame, metrics: dict) -> None:
-        """Genera le sette pagine del report e le esporta in un unico file PDF."""
+        """Genera le sei pagine del report e le esporta in un unico file PDF.
+
+        df resta nella firma (fa parte di IReportVisualizer) ma non e' piu' letto: tutte le
+        pagine attingono al dizionario del MetricsCalculator, che e' l'unica fonte di verita'
+        sui sottoinsiemi e sui filtri di stato. Prima la distribuzione delle iterazioni
+        ri-derivava il proprio filtro dal DataFrame, duplicando qui una regola che vive di
+        diritto nel calcolatore.
+        """
         sns.set_context("paper")
         self._output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -61,10 +66,9 @@ class ReportVisualizer(IReportVisualizer):
             self._page_core_rates(pdf, metrics)
             self._page_status_distribution(pdf, metrics)
             self._page_failure_reason_distribution(pdf, metrics)
-            self._page_long_circuit_reduction(pdf, metrics)
-            self._page_idle_qubits_reduction(pdf, metrics)
-            self._page_iteration_count_distribution(pdf, df)
-            self._page_dataset_source_comparison(pdf, metrics)
+            self._page_smell_reduction(pdf, metrics)
+            self._page_threshold_recovery(pdf, metrics)
+            self._page_iteration_count_distribution(pdf, metrics)
 
     # ---- helper condivisi ----
 
@@ -72,6 +76,13 @@ class ReportVisualizer(IReportVisualizer):
     def _new_figure(title: str) -> tuple[plt.Figure, plt.Axes]:
         fig, ax = plt.subplots(figsize=(8, 5))
         fig.patch.set_facecolor(_SURFACE)
+        ReportVisualizer._style_axis(ax, title)
+        return fig, ax
+
+    @staticmethod
+    def _style_axis(ax: plt.Axes, title: str) -> None:
+        """Stile comune a ogni asse del report, estratto per essere riusato dai pannelli
+        affiancati della pagina di riduzione, che non passano da _new_figure."""
         ax.set_facecolor(_SURFACE)
         ax.set_title(title, color=_INK_PRIMARY, fontsize=13, pad=12)
         ax.tick_params(colors=_INK_SECONDARY)
@@ -79,7 +90,6 @@ class ReportVisualizer(IReportVisualizer):
         ax.spines["right"].set_visible(False)
         ax.spines["left"].set_color(_GRIDLINE)
         ax.spines["bottom"].set_color(_GRIDLINE)
-        return fig, ax
 
     def _placeholder_page(self, pdf: PdfPages, title: str) -> None:
         """Pagina di cortesia per un sottoinsieme vuoto: mai un grafico vuoto o un crash.
@@ -128,9 +138,12 @@ class ReportVisualizer(IReportVisualizer):
     # ---- pagine ----
 
     def _page_core_rates(self, pdf: PdfPages, metrics: dict) -> None:
+        # "Equivalenza Funzionale" non compare piu': era vera per costruzione su ogni OPTIMIZED
+        # (il ValidationService non ne emette senza che check_equivalence sia passato), quindi
+        # non misurava nulla. Il dato utile e' il conteggio di not_equivalent nella pagina della
+        # tassonomia dei fallimenti.
         candidates = [
             ("Tasso di\nRisoluzione", metrics["tasso_risoluzione"]),
-            ("Equivalenza\nFunzionale", metrics["equivalenza_funzionale"]),
             ("Tasso di Successo\nGlobale", metrics["tasso_successo_globale"]),
         ]
         available = [(label, value) for label, value in candidates if value is not None]
@@ -181,92 +194,151 @@ class ReportVisualizer(IReportVisualizer):
         self._label_bars(ax, bars, [str(value) for value in values])
         self._save(pdf, fig)
 
-    def _page_long_circuit_reduction(self, pdf: PdfPages, metrics: dict) -> None:
-        """Un boxplot solo, sulla metrica dello smell.
+    def _page_smell_reduction(self, pdf: PdfPages, metrics: dict) -> None:
+        """Le due riduzioni affiancate su una sola pagina, una barra per circuito.
 
-        Prima erano due serie affiancate (gateCount e depth fisici): misuravano il costo del
-        circuito dopo la transpilazione, non lo smell, e non si muovevano coi refactoring della
-        pipeline.
+        Stanno insieme perche' rispondono alla stessa domanda su due smell diversi, e affiancate
+        si leggono come un confronto invece che come due risultati scollegati. Le due scale non
+        sono pero' comparabili -- percentuale a sinistra, colonne di attesa a destra -- ed e' il
+        motivo per cui restano due assi distinti con due etichette esplicite, anziche' una serie
+        doppia sullo stesso asse.
+
+        Una barra per circuito, etichettata col circuitId, invece di un boxplot o di un
+        istogramma: i sottoinsiemi contano pochissime unita' e i quartili di un boxplot su cinque
+        punti non avrebbero significato statistico. Con le barre ogni osservazione resta
+        rintracciabile nel dataset e citabile nel testo.
         """
-        values = metrics["long_circuit_reduction_pct"]["values"]
-        title = "Riduzione % di l*c (Long Circuit, OPTIMIZED)"
-        if not values:
+        long_circuit = metrics["long_circuit_reduction_pct"]
+        idle_qubits = metrics["idle_qubits_reduction"]
+        title = "Riduzione delle Metriche di Smell (OPTIMIZED)"
+
+        if not long_circuit["values"] and not idle_qubits["values"]:
             self._placeholder_page(pdf, title)
             return
 
-        fig, ax = self._new_figure(title)
-        box = ax.boxplot(values, tick_labels=["l * c"], patch_artist=True, widths=0.4)
-        for patch in box["boxes"]:
-            patch.set_facecolor(_BLUE)
-            patch.set_alpha(0.65)
-        self._style_count_axis(ax, "Riduzione %")
-        self._save(pdf, fig)
+        fig, (left_ax, right_ax) = plt.subplots(1, 2, figsize=(11, 5))
+        fig.patch.set_facecolor(_SURFACE)
 
-    def _page_idle_qubits_reduction(self, pdf: PdfPages, metrics: dict) -> None:
-        values = metrics["idle_qubits_reduction"]["values"]
-        title = "Riduzione di IdQ (Idle Qubits, OPTIMIZED)"
-        if not values:
-            self._placeholder_page(pdf, title)
-            return
-
-        fig, ax = self._new_figure(title)
-        ax.hist(
-            values,
-            bins=range(int(min(values)), int(max(values)) + 2),
-            color=_BLUE,
-            edgecolor=_SURFACE,
+        self._reduction_panel(
+            left_ax,
+            "Long Circuit",
+            long_circuit,
+            "Riduzione % di l * c",
+            "{:.1f}%",
         )
-        ax.set_xlabel("Colonne di attesa eliminate (baseline - refactored)", color=_INK_SECONDARY)
-        self._style_count_axis(ax, "Numero di circuiti")
+        self._reduction_panel(
+            right_ax,
+            "Idle Qubits",
+            idle_qubits,
+            "Colonne di attesa eliminate",
+            "{:.0f}",
+        )
+
+        fig.suptitle(title, color=_INK_PRIMARY, fontsize=14)
+        fig.tight_layout()
         self._save(pdf, fig)
 
-    def _page_iteration_count_distribution(self, pdf: PdfPages, df: pd.DataFrame) -> None:
-        title = "Distribuzione del Numero di Iterazioni"
-        values = self._processed_iteration_counts(df)
+    def _reduction_panel(
+        self, ax: plt.Axes, title: str, summary: dict, ylabel: str, value_format: str
+    ) -> None:
+        """Un pannello della pagina di riduzione: barre per circuito piu' la linea della media."""
+        values = summary["values"]
+        self._style_axis(ax, title)
         if not values:
-            self._placeholder_page(pdf, title)
+            ax.axis("off")
+            ax.text(
+                0.5,
+                0.5,
+                _NO_DATA_TEXT,
+                ha="center",
+                va="center",
+                color=_INK_SECONDARY,
+                fontsize=11,
+                transform=ax.transAxes,
+            )
             return
 
-        fig, ax = self._new_figure(title)
-        ax.hist(
-            values,
-            bins=range(int(min(values)), int(max(values)) + 2),
-            color=_BLUE,
-            edgecolor=_SURFACE,
+        # Le etichette possono mancare (dizionario costruito a mano nei test, o colonna circuitId
+        # assente): in quel caso si numerano le barre, senza far fallire il disegno.
+        labels = summary.get("labels") or [str(index + 1) for index in range(len(values))]
+        bars = ax.bar(range(len(values)), values, color=_BLUE, width=0.6)
+        ax.set_xticks(range(len(values)))
+        ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=8)
+
+        mean = sum(values) / len(values)
+        ax.axhline(mean, color=_ORANGE, linestyle="--", linewidth=1.4, zorder=2)
+        ax.text(
+            0.99,
+            mean,
+            f" media {value_format.format(mean)}",
+            color=_ORANGE,
+            va="bottom",
+            ha="right",
+            fontsize=9,
+            transform=ax.get_yaxis_transform(),
         )
-        ax.set_xlabel("Numero di iterazioni", color=_INK_SECONDARY)
-        self._style_count_axis(ax, "Numero di circuiti")
-        self._save(pdf, fig)
 
-    @staticmethod
-    def _processed_iteration_counts(df: pd.DataFrame) -> list[int]:
-        """iterationCount sul sottoinsieme OPTIMIZED/OPT_FAILED (esclude SMELL_FREE=0 di default,
-        stessa esclusione del numero_medio_iterazioni di MetricsCalculator, altrimenti il picco
-        artificiale a 0 comprimerebbe la distribuzione reale)."""
-        if "evaluation.status" not in df.columns:
-            return []
-        processed = df[df["evaluation.status"].isin(_PROCESSED_STATUSES)]
-        if processed.empty:
-            return []
-        return processed["evaluation.iterationCount"].dropna().tolist()
+        self._style_count_axis(ax, f"{ylabel}  (n = {len(values)})")
+        self._label_bars(ax, bars, [value_format.format(value) for value in values])
 
-    def _page_dataset_source_comparison(self, pdf: PdfPages, metrics: dict) -> None:
-        title = "Tasso di Risoluzione per Dataset di Provenienza"
-        available = {
-            source: values["tasso_risoluzione"]
-            for source, values in metrics["metriche_per_dataset_source"].items()
-            if values["tasso_risoluzione"] is not None
-        }
+    def _page_threshold_recovery(self, pdf: PdfPages, metrics: dict) -> None:
+        """Quota di circuiti che dopo il refactoring non sono piu' classificati come smelly.
+
+        Distinta dalle due pagine di riduzione, e non ridondante con esse: un circuito puo'
+        ridurre l*c del 48% e restare sopra la soglia. Qui la domanda non e' "di quanto e'
+        migliorato" ma "lo smell e' stato rimosso", che e' quella a cui la tesi deve rispondere.
+        """
+        recovery = metrics["rientro_sotto_soglia"]
+        labels = [
+            ("l * c\nsotto soglia", recovery["long_circuit"]),
+            ("IdQ\nazzerato", recovery["idle_qubits"]),
+            ("Nessuno smell\nresiduo", recovery["smell_free"]),
+        ]
+        available = [(label, share) for label, share in labels if share["rate"] is not None]
+        title = "Rientro sotto la Soglia di Rilevamento (OPTIMIZED)"
         if not available:
             self._placeholder_page(pdf, title)
             return
 
         fig, ax = self._new_figure(title)
-        labels = list(available.keys())
-        values = [available[label] * 100 for label in labels]
-        colors = _CATEGORICAL[: len(labels)]
-        bars = ax.bar(labels, values, color=colors, width=0.4)
+        bars = ax.bar(
+            [label for label, _ in available],
+            [share["rate"] * 100 for _, share in available],
+            color=_AQUA,
+            width=0.5,
+        )
         ax.set_ylim(0, 100)
         self._style_count_axis(ax, "%")
-        self._label_bars(ax, bars, [f"{value:.1f}%" for value in values])
+        # L'etichetta porta anche il rapporto grezzo: su denominatori di 5 o 6 circuiti una
+        # percentuale da sola ("60%") nasconde quanto sia piccolo il campione che la produce.
+        self._label_bars(
+            ax,
+            bars,
+            [f"{share['count']}/{share['total']}" for _, share in available],
+        )
+        self._save(pdf, fig)
+
+    def _page_iteration_count_distribution(self, pdf: PdfPages, metrics: dict) -> None:
+        """Conteggio dei circuiti per numero di iterazioni impiegate a convergere.
+
+        E' un BAR CHART di conteggi, non piu' un istogramma: la variabile e' un intero limitato
+        superiormente da maxIterations (con maxIterations=3 assume i soli valori 1, 2, 3), quindi
+        non c'e' alcuna scelta di bin da fare e un istogramma inventerebbe una continuita' che il
+        dato non ha. Il sottoinsieme e' ora quello dei soli OPTIMIZED, deciso a monte dal
+        MetricsCalculator: gli OPT_FAILED si fermano tutti a maxIterations per costruzione e
+        avrebbero prodotto una barra terminale che dice solo quanti fallimenti ci sono stati.
+        """
+        distribution = metrics["iterazioni_alla_convergenza"]["distribution"]
+        title = "Iterazioni Impiegate alla Convergenza (OPTIMIZED)"
+        if not distribution:
+            self._placeholder_page(pdf, title)
+            return
+
+        fig, ax = self._new_figure(title)
+        iterations = sorted(distribution)
+        counts = [distribution[iteration] for iteration in iterations]
+        bars = ax.bar([str(iteration) for iteration in iterations], counts, color=_BLUE, width=0.5)
+        ax.set_xlabel("Numero di iterazioni", color=_INK_SECONDARY)
+        self._style_count_axis(ax, "Numero di circuiti")
+        self._label_bars(ax, bars, [str(count) for count in counts])
         self._save(pdf, fig)

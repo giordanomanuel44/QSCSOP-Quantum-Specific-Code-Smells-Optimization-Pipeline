@@ -102,16 +102,12 @@ def test_calculate_computes_category1_and_3_rates_on_processed_subset_only() -> 
 
     # Sottoinsieme processato: c1, c2, c3 (esclude c0 SMELL_FREE) -> denominatore 3.
     assert metrics["tasso_risoluzione"] == pytest.approx(1 / 3)
-    # Equivalenza preservata: c1 (OPTIMIZED) + c3 (metrics_not_improved) -> 2/3.
-    assert metrics["equivalenza_funzionale"] == pytest.approx(2 / 3)
     # Successo globale: c1 + c2 (not_equivalent) + c3 (metrics_not_improved) -> 3/3.
     assert metrics["tasso_successo_globale"] == pytest.approx(1.0)
-    # Media iterazioni sullo stesso sottoinsieme: (1 + 3 + 2) / 3.
-    assert metrics["numero_medio_iterazioni"] == pytest.approx(2.0)
 
 
 @pytest.mark.unit
-def test_calculate_excludes_unexpected_error_from_equivalence_and_success() -> None:
+def test_calculate_excludes_unexpected_error_from_global_success() -> None:
     df = _df(
         [
             _optimized("c1"),
@@ -121,8 +117,8 @@ def test_calculate_excludes_unexpected_error_from_equivalence_and_success() -> N
 
     metrics = MetricsCalculator().calculate(df)
 
-    # unexpected_error non conta ne' come equivalenza preservata ne' come successo globale.
-    assert metrics["equivalenza_funzionale"] == pytest.approx(0.5)
+    # unexpected_error non conta come successo globale: un crash imprevisto non garantisce che
+    # sia mai stato prodotto codice valido.
     assert metrics["tasso_successo_globale"] == pytest.approx(0.5)
 
 
@@ -133,9 +129,30 @@ def test_calculate_returns_none_when_processed_subset_is_empty() -> None:
     metrics = MetricsCalculator().calculate(df)
 
     assert metrics["tasso_risoluzione"] is None
-    assert metrics["equivalenza_funzionale"] is None
     assert metrics["tasso_successo_globale"] is None
-    assert metrics["numero_medio_iterazioni"] is None
+    assert metrics["iterazioni_alla_convergenza"] == {"mean": None, "distribution": {}, "n": 0}
+
+
+@pytest.mark.unit
+def test_iterazioni_alla_convergenza_ignores_failed_circuits_stuck_at_max_iterations() -> None:
+    """Il difetto che la metrica sostituisce: gli OPT_FAILED sono tutti al soffitto per
+    costruzione, e mediarli coi convergenti censurava il risultato."""
+    df = _df(
+        [
+            _optimized("c1", iteration_count=1),
+            _optimized("c2", iteration_count=1),
+            _optimized("c3", iteration_count=2),
+            _opt_failed("c4", iteration_count=3),
+            _opt_failed("c5", iteration_count=3),
+        ]
+    )
+
+    metrics = MetricsCalculator().calculate(df)
+
+    # Media sui soli OPTIMIZED: (1 + 1 + 2) / 3, non (1+1+2+3+3)/5 = 2.0.
+    assert metrics["iterazioni_alla_convergenza"]["mean"] == pytest.approx(4 / 3)
+    assert metrics["iterazioni_alla_convergenza"]["distribution"] == {1: 2, 2: 1}
+    assert metrics["iterazioni_alla_convergenza"]["n"] == 3
 
 
 @pytest.mark.unit
@@ -187,7 +204,7 @@ def test_calculate_category2_empty_subset_returns_none_mean_and_empty_values() -
 
     metrics = MetricsCalculator().calculate(df)
 
-    assert metrics["idle_qubits_reduction"] == {"mean": None, "values": []}
+    assert metrics["idle_qubits_reduction"] == {"mean": None, "values": [], "labels": []}
 
 
 @pytest.mark.unit
@@ -199,8 +216,8 @@ def test_calculate_handles_dataset_with_no_optimized_circuits_without_keyerror()
 
     metrics = MetricsCalculator().calculate(df)
 
-    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": []}
-    assert metrics["idle_qubits_reduction"] == {"mean": None, "values": []}
+    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": [], "labels": []}
+    assert metrics["idle_qubits_reduction"] == {"mean": None, "values": [], "labels": []}
 
 
 @pytest.mark.unit
@@ -226,24 +243,78 @@ def test_calculate_distribuzione_stati_and_failure_reason() -> None:
 
 
 @pytest.mark.unit
-def test_calculate_metriche_per_dataset_source_are_computed_independently() -> None:
+def test_rientro_sotto_soglia_distinguishes_improved_from_actually_resolved() -> None:
+    """Il punto della metrica: una riduzione ampia non implica che lo smell sia stato rimosso."""
     df = _df(
         [
-            _optimized("c1", dataset_source="Bugs4Q"),
-            _opt_failed("c2", dataset_source="Bugs4Q", failure_reason="not_equivalent"),
-            _optimized("c3", dataset_source="TheSmellyEight"),
-            _optimized("c4", dataset_source="TheSmellyEight"),
+            # -48% su l*c ma ancora sopra la soglia inclusiva di 20: migliorato, non risolto.
+            _optimized(
+                "c1",
+                detected_smells=("long_circuit",),
+                baseline_long_circuit=50,
+                new_long_circuit=26,
+                baseline_idle_qubits=0,
+                new_idle_qubits=0,
+            ),
+            _optimized(
+                "c2",
+                detected_smells=("long_circuit",),
+                baseline_long_circuit=50,
+                new_long_circuit=6,
+                baseline_idle_qubits=0,
+                new_idle_qubits=0,
+            ),
         ]
     )
 
     metrics = MetricsCalculator().calculate(df)
 
-    assert metrics["metriche_per_dataset_source"]["Bugs4Q"]["tasso_risoluzione"] == pytest.approx(
-        0.5
+    assert metrics["rientro_sotto_soglia"]["long_circuit"] == {
+        "count": 1,
+        "total": 2,
+        "rate": pytest.approx(0.5),
+    }
+    # c1 resta smelly su l*c, quindi non e' privo di smell residui nonostante IdQ = 0.
+    assert metrics["rientro_sotto_soglia"]["smell_free"]["count"] == 1
+
+
+@pytest.mark.unit
+def test_rientro_sotto_soglia_uses_strict_comparison_for_idle_qubits() -> None:
+    """IdQ e' smelly a > 0: una sola colonna di attesa residua non e' un rientro."""
+    df = _df(
+        [
+            _optimized(
+                "c1",
+                detected_smells=("idle_qubits",),
+                baseline_idle_qubits=3,
+                new_idle_qubits=1,
+            ),
+            _optimized(
+                "c2",
+                detected_smells=("idle_qubits",),
+                baseline_idle_qubits=3,
+                new_idle_qubits=0,
+            ),
+        ]
     )
-    assert metrics["metriche_per_dataset_source"]["TheSmellyEight"][
-        "tasso_risoluzione"
-    ] == pytest.approx(1.0)
+
+    metrics = MetricsCalculator().calculate(df)
+
+    assert metrics["rientro_sotto_soglia"]["idle_qubits"] == {
+        "count": 1,
+        "total": 2,
+        "rate": pytest.approx(0.5),
+    }
+
+
+@pytest.mark.unit
+def test_rientro_sotto_soglia_is_empty_without_optimized_circuits() -> None:
+    df = _df([_smell_free("c0"), _opt_failed("c1")])
+
+    recovery = MetricsCalculator().calculate(df)["rientro_sotto_soglia"]
+
+    for key in ("long_circuit", "idle_qubits", "smell_free"):
+        assert recovery[key] == {"count": 0, "total": 0, "rate": None}
 
 
 @pytest.mark.unit
@@ -251,13 +322,18 @@ def test_calculate_on_completely_empty_dataframe_does_not_raise() -> None:
     metrics = MetricsCalculator().calculate(pd.DataFrame())
 
     assert metrics["tasso_risoluzione"] is None
-    assert metrics["equivalenza_funzionale"] is None
     assert metrics["tasso_successo_globale"] is None
-    assert metrics["numero_medio_iterazioni"] is None
-    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": []}
+    assert metrics["iterazioni_alla_convergenza"] == {"mean": None, "distribution": {}, "n": 0}
+    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": [], "labels": []}
+    assert metrics["rientro_sotto_soglia"]["smell_free"] == {
+        "count": 0,
+        "total": 0,
+        "rate": None,
+    }
     assert metrics["distribuzione_failure_reason"] == {}
     assert metrics["distribuzione_stati"] == {}
-    assert metrics["metriche_per_dataset_source"] == {}
+    assert "equivalenza_funzionale" not in metrics
+    assert "metriche_per_dataset_source" not in metrics
 
 
 @pytest.mark.unit
@@ -276,4 +352,4 @@ def test_pct_reduction_avoids_division_by_zero_on_degenerate_baseline() -> None:
     metrics = MetricsCalculator().calculate(df)
 
     # baseline=0 -> divisione per zero evitata, il valore e' scartato (NaN -> dropna), non 0/0.
-    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": []}
+    assert metrics["long_circuit_reduction_pct"] == {"mean": None, "values": [], "labels": []}
