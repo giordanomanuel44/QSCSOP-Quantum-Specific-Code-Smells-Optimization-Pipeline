@@ -29,7 +29,7 @@ from qscsop_pipeline.qscsop.entities.evaluation_status import EvaluationStatus
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
 from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import RefactorerAgent
 from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import ReviewerAgent
-from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL, DETECTOR_MODEL
+from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL
 from qscsop_pipeline.qscsop.mas.mas_engine import MASEngine
 from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
 from qscsop_pipeline.qscsop.coordinator.pipeline_coordinator import PipelineCoordinator
@@ -59,9 +59,8 @@ def test_pipeline_coordinator_processes_two_real_records_end_to_end(tmp_path: Pa
     output_path = tmp_path / "risultati_dataset_bounded.jsonl"
 
     facade = QiskitFacade()
-    detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
-    detector_agent = DetectorAgent(llm=detector_llm, facade=QiskitFacade())
+    detector_agent = DetectorAgent(llm=agent_llm, facade=QiskitFacade())
     refactorer_agent = RefactorerAgent(llm=agent_llm)
     reviewer_agent = ReviewerAgent(llm=agent_llm)
     validation_service = ValidationService(facade=facade)

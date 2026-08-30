@@ -13,7 +13,7 @@ from crewai import LLM
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
 from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import RefactorerAgent
-from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL, DETECTOR_MODEL
+from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL
 
 # tests/e2e/qscsop/ -> risali a root repo, poi ai file smelly usati come baseline reale.
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "raw" / "thesmellyeight"
@@ -23,10 +23,10 @@ _IDQ_SMELLY_PATH = _DATA_DIR / "idq" / "idq-smelly.py"
 
 @pytest.mark.e2e
 def test_refactorer_agent_fixes_long_circuit_preserving_equivalence() -> None:
-    # DetectorAgent su DETECTOR_MODEL, RefactorerAgent su DEFAULT_AGENT_MODEL: vedi
-    # qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato modelli diversi
-    # per-agente.
-    detector = DetectorAgent(llm=LLM(model=DETECTOR_MODEL, temperature=0, facade=QiskitFacade()))
+    # Modello unico per entrambi gli agenti: vedi qscsop_pipeline.qscsop.mas.llm_config.
+    detector = DetectorAgent(
+        llm=LLM(model=DEFAULT_AGENT_MODEL, temperature=0), facade=QiskitFacade()
+    )
     refactorer = RefactorerAgent(llm=LLM(model=DEFAULT_AGENT_MODEL, temperature=0))
     facade = QiskitFacade()
 
@@ -55,10 +55,10 @@ def test_refactorer_agent_fixes_long_circuit_preserving_equivalence() -> None:
     strict=False,
 )
 def test_refactorer_agent_fixes_idle_qubits_preserving_equivalence() -> None:
-    # DetectorAgent su DETECTOR_MODEL, RefactorerAgent su DEFAULT_AGENT_MODEL: vedi
-    # qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato modelli diversi
-    # per-agente.
-    detector = DetectorAgent(llm=LLM(model=DETECTOR_MODEL, temperature=0, facade=QiskitFacade()))
+    # Modello unico per entrambi gli agenti: vedi qscsop_pipeline.qscsop.mas.llm_config.
+    detector = DetectorAgent(
+        llm=LLM(model=DEFAULT_AGENT_MODEL, temperature=0), facade=QiskitFacade()
+    )
     refactorer = RefactorerAgent(llm=LLM(model=DEFAULT_AGENT_MODEL, temperature=0))
     facade = QiskitFacade()
 

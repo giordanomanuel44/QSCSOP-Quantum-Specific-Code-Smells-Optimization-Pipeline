@@ -7,7 +7,7 @@ from crewai import LLM
 
 from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import QiskitFacade
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
-from qscsop_pipeline.qscsop.mas.llm_config import DETECTOR_MODEL
+from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL
 
 # tests/e2e/qscsop/ -> risali a root repo, poi ai file di esempio (smell noto / circuito corretto).
 _DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "raw" / "thesmellyeight"
@@ -19,7 +19,7 @@ _IDQ_FIXED_PATH = _DATA_DIR / "idq" / "idq-fixed.py"
 
 @pytest.mark.e2e
 def test_detector_agent_detects_smell_on_real_example() -> None:
-    llm = LLM(model=DETECTOR_MODEL, temperature=0)
+    llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     agent = DetectorAgent(llm=llm, facade=QiskitFacade())
 
     code = _LC_SMELLY_PATH.read_text(encoding="utf-8")
@@ -36,7 +36,7 @@ def test_detector_agent_detects_smell_on_real_example() -> None:
 
 @pytest.mark.e2e
 def test_detector_agent_detects_idle_qubits_on_real_example() -> None:
-    llm = LLM(model=DETECTOR_MODEL, temperature=0)
+    llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     agent = DetectorAgent(llm=llm, facade=QiskitFacade())
 
     code = _IDQ_SMELLY_PATH.read_text(encoding="utf-8")
@@ -71,7 +71,7 @@ def test_detector_agent_detects_idle_qubits_on_real_example() -> None:
 
 @pytest.mark.e2e
 def test_detector_agent_reports_clean_on_fixed_circuit() -> None:
-    llm = LLM(model=DETECTOR_MODEL, temperature=0)
+    llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     agent = DetectorAgent(llm=llm, facade=QiskitFacade())
 
     code = _LC_FIXED_PATH.read_text(encoding="utf-8")
@@ -89,7 +89,7 @@ def test_detector_agent_reports_clean_on_fixed_circuit() -> None:
 
 @pytest.mark.e2e
 def test_detector_agent_reports_clean_on_fixed_idle_qubits_circuit() -> None:
-    llm = LLM(model=DETECTOR_MODEL, temperature=0)
+    llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     agent = DetectorAgent(llm=llm, facade=QiskitFacade())
 
     code = _IDQ_FIXED_PATH.read_text(encoding="utf-8")

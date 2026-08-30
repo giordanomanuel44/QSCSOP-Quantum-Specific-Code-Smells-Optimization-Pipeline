@@ -27,9 +27,12 @@ class SmellReportDTO:
         """False quando il Detector dichiara che non c'e' nulla di rimovibile.
 
         NON e' l'assenza di smell (per quello c'e' has_smells): e' un circuito sopra soglia per
-        sola dimensione, in cui ogni operazione contribuisce e nulla si cancella. Il MASEngine
-        salta il ciclo, perche' non esiste una riparazione che preservi il comportamento.
-        E' un GIUDIZIO DEL MODELLO, non una prova: va riportato come tale.
+        sola dimensione, in cui ogni operazione contribuisce e nulla si cancella.
+
+        E' REGISTRATO, NON AGITO: il MASEngine lo scrive nella tracciatura ma entra nel ciclo
+        comunque. Quando invece lo usava per uscire subito, dei 33 circuiti dichiarati
+        irriparabili 15 erano migliorabili e 5 portabili sotto soglia. E' un GIUDIZIO DEL
+        MODELLO, non una prova: va riportato come tale, e misurarne l'accuratezza e' un dato.
         """
         return self._repairable
 

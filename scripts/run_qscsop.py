@@ -32,7 +32,7 @@ from qscsop_pipeline.qscsop.coordinator.pipeline_coordinator import PipelineCoor
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
 from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import RefactorerAgent
 from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import ReviewerAgent
-from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL, DETECTOR_MODEL
+from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL
 from qscsop_pipeline.qscsop.mas.mas_engine import MASEngine
 from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
 from qscsop_pipeline.qscsop.sinks.jsonl_data_sink import JsonlDataSink
@@ -93,17 +93,12 @@ if __name__ == "__main__":
 
     facade = QiskitFacade()
 
-    # DetectorAgent su un modello piu' grande (DETECTOR_MODEL): non classifica piu' -- lo fanno
-    # la facade e le soglie -- ma deve PRESCRIVERE quali operazioni cambiare, che e' il compito
-    # di lettura del codice piu' difficile dei tre. RefactorerAgent e ReviewerAgent tollerano
-    # meglio l'approssimazione, essendo corretti dal ciclo iterativo di validazione/review. Vedi
-    # qscsop_pipeline/qscsop/mas/llm_config.py
-    detector_llm = LLM(model=DETECTOR_MODEL, temperature=0.6)
-    # Una singola istanza per ReviewerAgent.
+    # Una singola istanza di crewai.LLM iniettata in tutti e tre gli agenti: il modello e' unico,
+    # vedi qscsop_pipeline/qscsop/mas/llm_config.py per la revisione della strategia per-agente.
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0.6)
 
-    detector_agent = DetectorAgent(llm=detector_llm, facade=facade)
-    refactorer_agent = RefactorerAgent(llm=detector_llm)
+    detector_agent = DetectorAgent(llm=agent_llm, facade=facade)
+    refactorer_agent = RefactorerAgent(llm=agent_llm)
     reviewer_agent = ReviewerAgent(llm=agent_llm)
     validation_service = ValidationService(facade=facade)
 

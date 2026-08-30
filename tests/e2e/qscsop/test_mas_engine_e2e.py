@@ -27,7 +27,7 @@ from qscsop_pipeline.qscsop.entities.quantum_program_entity import QuantumProgra
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
 from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import RefactorerAgent
 from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import ReviewerAgent
-from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL, DETECTOR_MODEL
+from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL
 from qscsop_pipeline.qscsop.mas.mas_engine import MASEngine
 from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
 
@@ -63,14 +63,11 @@ def _build_baseline_entity(facade: QiskitFacade) -> QuantumProgramEntity:
 
 @pytest.mark.e2e
 def test_mas_engine_processes_idle_qubits_circuit_end_to_end() -> None:
-    # DetectorAgent su un modello piu' grande (DETECTOR_MODEL): richiede piu' rigore analitico,
-    # vedi qscsop_pipeline.qscsop.mas.llm_config per la diagnosi che ha motivato la scelta.
-    # RefactorerAgent e ReviewerAgent restano sul modello piu' piccolo e veloce
-    # (DEFAULT_AGENT_MODEL).
-    detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
+    # Una singola istanza di LLM iniettata in tutti e tre gli agenti: modello unico, vedi
+    # qscsop_pipeline.qscsop.mas.llm_config.
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     facade = QiskitFacade()
-    detector = DetectorAgent(llm=detector_llm, facade=QiskitFacade())
+    detector = DetectorAgent(llm=agent_llm, facade=QiskitFacade())
     refactorer = RefactorerAgent(llm=agent_llm)
     reviewer = ReviewerAgent(llm=agent_llm)
     validation_service = ValidationService(facade=facade)

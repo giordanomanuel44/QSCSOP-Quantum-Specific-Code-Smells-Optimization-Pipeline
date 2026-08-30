@@ -23,7 +23,7 @@ from qscsop_pipeline.common.qiskit_facade.implementations.qiskit_facade import Q
 from qscsop_pipeline.qscsop.mas.agents.detector_agent import DetectorAgent
 from qscsop_pipeline.qscsop.mas.agents.refactorer_agent import RefactorerAgent
 from qscsop_pipeline.qscsop.mas.agents.reviewer_agent import ReviewerAgent
-from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL, DETECTOR_MODEL
+from qscsop_pipeline.qscsop.mas.llm_config import DEFAULT_AGENT_MODEL
 from qscsop_pipeline.qscsop.mas.validation.validation_service import ValidationService
 
 # tests/e2e/qscsop/ -> risali a root repo, poi al file smelly usato come baseline reale.
@@ -35,13 +35,11 @@ _TAG = "[Refactor/Review loop E2E]"
 
 @pytest.mark.e2e
 def test_review_feedback_guides_a_second_refactoring_attempt() -> None:
-    # DetectorAgent su un modello piu' grande (DETECTOR_MODEL), RefactorerAgent/ReviewerAgent sul
-    # modello piu' piccolo e veloce (DEFAULT_AGENT_MODEL): vedi qscsop.mas.llm_config per la
-    # diagnosi.
-    detector_llm = LLM(model=DETECTOR_MODEL, temperature=0)
+    # Una singola istanza di LLM iniettata in tutti e tre gli agenti: modello unico, vedi
+    # qscsop.mas.llm_config.
     agent_llm = LLM(model=DEFAULT_AGENT_MODEL, temperature=0)
     facade = QiskitFacade()
-    detector = DetectorAgent(llm=detector_llm, facade=QiskitFacade())
+    detector = DetectorAgent(llm=agent_llm, facade=QiskitFacade())
     refactorer = RefactorerAgent(llm=agent_llm)
     reviewer = ReviewerAgent(llm=agent_llm)
     validation_service = ValidationService(facade=facade)

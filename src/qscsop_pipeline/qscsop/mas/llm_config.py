@@ -1,21 +1,26 @@
-"""Configurazione di produzione condivisa dei modelli Ollama per gli agenti LLM del MAS.
+"""Configurazione di produzione del modello Ollama condiviso dagli agenti LLM del MAS.
 
 Punto unico da modificare (nuovo modello, o revisione dell'assemblaggio di produzione): sia
-scripts/run_qscsop.py sia i test e2e importano le costanti da qui, nessuna stringa di modello
+scripts/run_qscsop.py sia i test e2e importano la costante da qui, nessuna stringa di modello
 va duplicata altrove.
 
-DETECTOR_MODEL e' piu' grande di DEFAULT_AGENT_MODEL: vedi
-docs/report_detector_agent_model_selection.md per la diagnosi completa che ha motivato la
-differenziazione. In sintesi: qwen2.5-coder:14b classifica Long Circuit / Idle Qubits in modo
-corretto e consistente dove il 7b confondeva sistematicamente i due smell su un caso di
-cancellazione di gate (non ricostruiva la semantica di broadcast di Qiskit), un problema non
-risolvibile via prompt engineering sul 7b in quattro tentativi successivi. Il DetectorAgent
-richiede un giudizio di classificazione corretto al primo colpo (un falso negativo esclude un
-circuito smelly dal ciclo di ottimizzazione), mentre RefactorerAgent e ReviewerAgent tollerano
-meglio l'approssimazione, essendo corretti dal ciclo iterativo di validazione/review, e restano
-sul modello piu' piccolo e veloce. La dependency injection del modello per-agente, gia' prevista
-dall'architettura, permette questa scelta senza alcuna modifica strutturale.
+UN SOLO MODELLO PER TUTTI E TRE GLI AGENTI. Questa e' una revisione della strategia
+differenziata precedente (DETECTOR_MODEL su qwen2.5-coder:14b, DEFAULT_AGENT_MODEL su
+qwen2.5-coder:7b), documentata in docs/report_detector_agent_model_selection.md: quel report
+resta valido come diagnosi storica -- il 7b confondeva sistematicamente i due smell su un caso
+di cancellazione di gate -- ma la sua premessa non regge piu'. La diagnosi riguardava un
+DetectorAgent che CLASSIFICAVA; da allora la classificazione e' uscita dall'LLM ed e' passata a
+QiskitFacade.calculate_smell_metrics piu' detection_thresholds, che sono esatte per costruzione.
+All'LLM resta la sola prescrizione, e il divario di capacita' che motivava due modelli diversi
+non si applica a quel compito.
+
+Con qwen3-coder:30b, inoltre, il modello piu' piccolo della coppia originale non e' piu' in
+esercizio: mantenere due costanti con lo stesso valore documentava una differenziazione che
+nei fatti non esisteva.
+
+L'architettura continua a permettere modelli per-agente senza modifiche strutturali: gli agenti
+dipendono da crewai.BaseLLM e ricevono l'istanza via costruttore, quindi reintrodurre una
+seconda costante e' una modifica locale a questo file e ai punti di assemblaggio.
 """
 
-DETECTOR_MODEL = "ollama/qwen3-coder:30b"
 DEFAULT_AGENT_MODEL = "ollama/qwen3-coder:30b"
